@@ -1,7 +1,8 @@
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:path_provider/path_provider.dart';
-import '../src/rust/frb_generated.dart';
+import '../src/rust/frb_generated.dart' show RustLib;
+import '../src/rust/api.dart' as rustApi;
 import '../services/rpc_client.dart';
 
 const _prefRpcUrl  = 'rpc_url';
@@ -87,14 +88,14 @@ class WalletState extends ChangeNotifier {
 
   Future<void> generateWallet(String passphrase) async {
     final path = await defaultKeystorePath();
-    final info = await RustLib.generateWallet(passphrase: passphrase, keystorePath: path);
+    final info = rustApi.generateWallet(passphrase: passphrase, keystorePath: path);
     _applyInfo(info, passphrase);
     await refreshBalance();
   }
 
   Future<void> unlockWallet(String passphrase) async {
     final path = await defaultKeystorePath();
-    final info = await RustLib.unlockWallet(passphrase: passphrase, keystorePath: path);
+    final info = rustApi.unlockWallet(passphrase: passphrase, keystorePath: path);
     _applyInfo(info, passphrase);
     await refreshBalance();
   }
@@ -110,7 +111,7 @@ class WalletState extends ChangeNotifier {
 
   Future<void> advanceAddress() async {
     if (_keystorePath == null || _passphrase == null) return;
-    final info = await RustLib.advanceAddress(
+    final info = rustApi.advanceAddress(
       passphrase: _passphrase!,
       keystorePath: _keystorePath!,
     );

@@ -6,7 +6,7 @@ import 'app.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await RustLib.init();
+  await RustLib.init();  // loads the native .so / dylib
 
   final state = WalletState();
   await state.init();

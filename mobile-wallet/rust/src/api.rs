@@ -12,7 +12,6 @@ use crate::keystore::{self, KeystoreInner};
 
 // ── Response types ─────────────────────────────────────────────────────────
 
-#[frb(dart_metadata = ("freezed"))]
 pub struct WalletInfo {
     /// Base58Check transparent receive address.
     pub address: String,
