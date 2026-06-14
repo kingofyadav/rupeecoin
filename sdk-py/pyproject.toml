@@ -1,0 +1,20 @@
+[build-system]
+requires      = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
+
+[project]
+name        = "rupeecoin"
+version     = "0.1.0"
+description = "RupeeCoin Python SDK — PyO3 bindings for the RupeeCoin blockchain"
+readme      = "README.md"
+license     = { text = "MIT" }
+requires-python = ">=3.8"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Rust",
+    "Topic :: Software Development :: Libraries",
+]
+
+[tool.maturin]
+module-name = "rupeecoin"
+features    = ["pyo3/extension-module"]

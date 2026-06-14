@@ -1,0 +1,26 @@
+{
+  "name": "@rupeecoin/sdk",
+  "version": "0.1.0",
+  "description": "RupeeCoin JavaScript/TypeScript SDK — RPC client, transaction builder, address utilities",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "build:watch": "tsc --watch",
+    "test": "node dist/index.test.js"
+  },
+  "keywords": ["rupeecoin", "blockchain", "post-quantum", "sdk"],
+  "license": "MIT",
+  "devDependencies": {
+    "typescript": "^5.4.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

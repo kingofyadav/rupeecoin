@@ -1,0 +1,16 @@
+[package]
+name    = "rupeecoin-privacy"
+version = "0.3.0"
+edition = "2021"
+
+[dependencies]
+rupeecoin-crypto    = { path = "../crypto" }
+rupeecoin-zkproof   = { path = "../zkproof" }
+pqcrypto-kyber      = { workspace = true }
+pqcrypto-traits     = { workspace = true }
+chacha20poly1305    = { workspace = true }
+blake3              = { workspace = true }
+rand                = { workspace = true }
+serde               = { workspace = true }
+thiserror           = { workspace = true }
+bincode             = { workspace = true }

@@ -1,0 +1,55 @@
+[workspace]
+# Standalone workspace — intentionally not a member of the root workspace.
+# Keeps Tauri's system dependencies out of the main cargo build.
+
+[package]
+name = "rupeecoin-desktop-wallet"
+version = "0.1.0"
+edition = "2021"
+description = "RupeeCoin desktop wallet — Tauri 2 GUI wrapping the RupeeCoin core"
+
+[[bin]]
+name = "rupeecoin-desktop-wallet"
+path = "src/main.rs"
+
+[dependencies]
+# RupeeCoin core (path deps into parent workspace)
+rupeecoin-sdk    = { path = "../rupeecoin-sdk" }
+rupeecoin-crypto = { path = "../core/crypto" }
+rupeecoin-types  = { path = "../core/types" }
+
+# Tauri 2.x desktop GUI framework (Ubuntu 24.04: uses webkit2gtk-4.1 natively)
+tauri = { version = "2" }
+
+# Serialization
+serde      = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Cryptography (keystore: Argon2id + XChaCha20-Poly1305)
+argon2           = "0.5"
+chacha20poly1305 = "0.10"
+rand             = "0.8"
+
+# Utilities
+hex     = "0.4"
+anyhow  = "1"
+ureq    = { version = "2", features = ["json"] }
+bincode = "1"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+# ── Build notes ───────────────────────────────────────────────────────────────
+# This crate is NOT in the root workspace (Cargo.toml members) — keeps Tauri's
+# system dependencies out of the main `cargo build --workspace`.
+#
+# Build this crate:
+#   cd desktop-wallet
+#   cargo build --release
+#   cargo tauri build   (full bundle — needs tauri-cli v2)
+#
+# Install tauri-cli v2:
+#   cargo install tauri-cli --version "^2"
+#
+# Linux system dependencies (Ubuntu 24.04):
+#   sudo apt install libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libayatana-appindicator3-dev

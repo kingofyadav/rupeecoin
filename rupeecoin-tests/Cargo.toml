@@ -1,0 +1,41 @@
+[package]
+name    = "rupeecoin-tests"
+version = "0.3.0"
+edition = "2021"
+
+# No library — this crate exists only for integration tests.
+[lib]
+path = "src/lib.rs"
+
+[dev-dependencies]
+rupeecoin-crypto     = { path = "../core/crypto" }
+rupeecoin-types      = { path = "../core/types" }
+rupeecoin-utxo       = { path = "../core/utxo" }
+rupeecoin-blockchain = { path = "../core/blockchain" }
+rupeecoin-mempool    = { path = "../core/mempool" }
+rupeecoin-consensus  = { path = "../core/consensus" }
+rupeecoin-staking    = { path = "../core/staking" }
+rupeecoin-privacy    = { path = "../core/privacy" }
+rupeecoin-zkproof    = { path = "../core/zkproof" }
+rupeecoin-economics  = { path = "../core/economics" }
+rupeecoin-sdk        = { path = "../rupeecoin-sdk" }
+proptest             = { workspace = true }
+bincode              = { workspace = true }
+hex                  = { workspace = true }
+criterion            = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name    = "block_throughput"
+harness = false
+
+[[bench]]
+name    = "state_root"
+harness = false
+
+[[bench]]
+name    = "privacy_proof"
+harness = false
+
+[[bench]]
+name    = "chain_sync"
+harness = false

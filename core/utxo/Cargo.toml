@@ -1,0 +1,10 @@
+[package]
+name    = "rupeecoin-utxo"
+version = "0.3.0"
+edition = "2021"
+
+[dependencies]
+rupeecoin-crypto = { path = "../crypto" }
+rupeecoin-types  = { path = "../types" }
+thiserror        = { workspace = true }
+bincode          = { workspace = true }

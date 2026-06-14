@@ -1,0 +1,631 @@
+pub mod genesis;
+
+use std::collections::HashSet;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use rupeecoin_consensus::{select_proposer, slot_to_epoch, verify_block_vrf, SLOTS_PER_EPOCH};
+use rupeecoin_crypto::{hash_data, Hash, KeyPair, PublicKey, Signature, VrfProof};
+use rupeecoin_economics::{
+    apply_inactivity_leak, block_reward, compute_block_rewards, next_base_fee, route_fees,
+    treasury_address, PmfpAccumulator,
+};
+use rupeecoin_privacy::{CommitmentTree, Nullifier, PrivacyBlockApply, PrivacyTxError, SpendEvidence};
+use rupeecoin_staking::{ValidatorRegistry, ValidatorStatus};
+use rupeecoin_types::{
+    block::{merkle_root, privacy_merkle_root},
+    Attestation, Block, BlockHeader, OutPoint, SlashingEvidence, Transaction, TxInput, TxOutput,
+    MAINNET_CHAIN_ID,
+};
+use rupeecoin_utxo::{UtxoError, UtxoSet};
+use thiserror::Error;
+
+pub use genesis::genesis_block;
+
+/// How many recent blocks to keep in RAM.  Older blocks are retrieved from
+/// `ChainStore` on demand.  This prevents unbounded heap growth on long chains.
+pub const BLOCK_KEEP_LAST: usize = 512;
+
+#[derive(Error, Debug)]
+pub enum ChainError {
+    #[error("block height {0} does not follow chain tip {1}")]
+    InvalidHeight(u64, u64),
+    #[error("prev_hash does not match tip hash")]
+    InvalidPrevHash,
+    #[error("merkle root mismatch")]
+    InvalidMerkleRoot,
+    #[error("block has no transactions")]
+    EmptyBlock,
+    #[error("first transaction must be coinbase")]
+    MissingCoinbase,
+    #[error("coinbase reward {0} exceeds limit {1}")]
+    ExcessiveCoinbaseReward(u64, u64),
+    #[error("non-coinbase transaction at index 0")]
+    UnexpectedCoinbase,
+    #[error("transaction error: {0}")]
+    Utxo(#[from] UtxoError),
+    #[error("proposer index {0} does not match expected {1} for slot {2}")]
+    InvalidProposerIndex(u32, u32, u64),
+    #[error("missing proposer signature for non-genesis block")]
+    MissingProposerSignature,
+    #[error("proposer signature verification failed")]
+    InvalidProposerSignature,
+    #[error("proposer index out of range: {0} >= active set size {1}")]
+    ProposerIndexOutOfRange(u32, usize),
+    #[error("privacy root mismatch")]
+    InvalidPrivacyRoot,
+    #[error("privacy transaction invalid: {0}")]
+    PrivacyTx(#[from] PrivacyTxError),
+    #[error("base fee mismatch: got {0}, expected {1}")]
+    InvalidBaseFee(u64, u64),
+    #[error("gas_used mismatch: got {0}, expected {1}")]
+    InvalidGasUsed(u64, u64),
+    #[error("state root mismatch: header claims {0:?}, computed {1:?}")]
+    InvalidStateRoot(Hash, Hash),
+    #[error("VRF proof verification failed for slot {0}")]
+    InvalidVrfProof(u64),
+    #[error("STARK spend proof invalid: {0}")]
+    InvalidStarkProof(String),
+    #[error("invalid reward claim: {0}")]
+    InvalidRewardClaim(String),
+    #[error("invalid slashing report: {0}")]
+    InvalidSlashingReport(String),
+}
+
+pub struct Chain {
+    pub blocks: Vec<Block>,
+    pub utxo_set: UtxoSet,
+    pub commitment_tree: CommitmentTree,
+    pub spent_nullifiers: HashSet<Nullifier>,
+    pub recent_roots: Vec<Hash>,
+    pub pmfp: PmfpAccumulator,
+}
+
+pub const ANCHOR_DEPTH: usize = 100;
+
+impl Chain {
+    pub fn new(genesis: Block) -> Self {
+        let mut utxo_set = UtxoSet::new();
+        utxo_set
+            .apply_block(&genesis)
+            .expect("genesis block must be valid");
+        let commitment_tree = CommitmentTree::new();
+        let genesis_root = commitment_tree.root();
+        Chain {
+            blocks: vec![genesis],
+            utxo_set,
+            commitment_tree,
+            spent_nullifiers: HashSet::new(),
+            recent_roots: vec![genesis_root],
+            pmfp: PmfpAccumulator::new(),
+        }
+    }
+
+    pub fn tip(&self) -> &Block {
+        self.blocks.last().expect("chain always has genesis")
+    }
+
+    pub fn height(&self) -> u64 {
+        self.tip().header.height
+    }
+
+    pub fn add_block(
+        &mut self,
+        block: Block,
+        registry: &mut ValidatorRegistry,
+    ) -> Result<(), ChainError> {
+        self.validate(&block, registry)?;
+        self.utxo_set.apply_block(&block)?;
+
+        let computed = self.utxo_set.state_root();
+        if block.header.state_root != computed {
+            return Err(ChainError::InvalidStateRoot(block.header.state_root, computed));
+        }
+
+        // ── Privacy ───────────────────────────────────────────────────────────
+        let height = block.header.height;
+        let apply = PrivacyBlockApply::compute(&block.privacy_txs, &self.commitment_tree, height);
+        for cm in &apply.new_commitments {
+            self.commitment_tree.append(*cm);
+        }
+        for (nullifier, _) in &apply.new_nullifiers {
+            self.spent_nullifiers.insert(*nullifier);
+        }
+        self.recent_roots.push(apply.new_tree_root);
+        if self.recent_roots.len() > ANCHOR_DEPTH + 1 {
+            self.recent_roots.remove(0);
+        }
+
+        self.apply_economics(&block, registry);
+        self.apply_special_txs(&block, registry);
+        self.blocks.push(block);
+        // Evict old blocks beyond the sliding window to prevent unbounded RAM growth.
+        if self.blocks.len() > BLOCK_KEEP_LAST {
+            let excess = self.blocks.len() - BLOCK_KEEP_LAST;
+            self.blocks.drain(..excess);
+        }
+        Ok(())
+    }
+
+    fn apply_special_txs(&self, block: &Block, registry: &mut ValidatorRegistry) {
+        for tx in &block.transactions[1..] {
+            if tx.is_reward_claim() {
+                if let Some(addr) = tx.reward_claim_addr() {
+                    let claimed: u64 = tx.outputs.iter().map(|o| o.amount).sum();
+                    let _ = registry.withdraw_rewards(&addr, claimed);
+                }
+            } else if tx.is_slashing_report() {
+                if let Some(evidence) = tx.slashing_evidence() {
+                    let _ = registry.slash(&slashed_validator_addr(&evidence));
+                }
+            }
+        }
+    }
+
+    fn apply_economics(&mut self, block: &Block, registry: &mut ValidatorRegistry) {
+        let height = block.header.height;
+        let slot = block.header.slot;
+        let epoch = slot_to_epoch(slot);
+
+        for att in &block.attestations {
+            let addr = att.validator_pubkey.to_hash();
+            let att_epoch = slot_to_epoch(att.slot);
+            registry.mark_attested(&addr, att_epoch);
+        }
+
+        let proposer_addr = self.proposer_address(block, registry);
+        let split = compute_block_rewards(height, registry, &proposer_addr);
+        for (addr, amount) in &split.validator_credits {
+            registry.credit_rewards(addr, *amount);
+        }
+
+        let fee_split = route_fees(block.header.gas_used, block.header.base_fee);
+        self.pmfp.add_fees(fee_split.pmfp_contribution);
+
+        if height > 0 && slot % SLOTS_PER_EPOCH == 0 {
+            registry.process_epoch_participation(epoch);
+            apply_inactivity_leak(registry, epoch);
+            self.pmfp.distribute_epoch(registry);
+        }
+    }
+
+    fn proposer_address(&self, block: &Block, registry: &ValidatorRegistry) -> Hash {
+        registry
+            .active_set()
+            .get(block.header.proposer_index as usize)
+            .copied()
+            .unwrap_or_else(Hash::zero)
+    }
+
+    fn validate(&self, block: &Block, registry: &ValidatorRegistry) -> Result<(), ChainError> {
+        let tip = self.tip();
+        let expected_height = tip.header.height + 1;
+
+        if block.header.height != expected_height {
+            return Err(ChainError::InvalidHeight(
+                block.header.height,
+                tip.header.height,
+            ));
+        }
+        if block.header.prev_hash != tip.hash() {
+            return Err(ChainError::InvalidPrevHash);
+        }
+        if block.header.merkle_root != block.compute_merkle_root() {
+            return Err(ChainError::InvalidMerkleRoot);
+        }
+        if block.transactions.is_empty() {
+            return Err(ChainError::EmptyBlock);
+        }
+        if !block.transactions[0].is_coinbase() {
+            return Err(ChainError::MissingCoinbase);
+        }
+
+        // ── Fee-market checks ─────────────────────────────────────────────────
+        let expected_gas = block.transactions.len().saturating_sub(1) as u64;
+        if block.header.gas_used != expected_gas {
+            return Err(ChainError::InvalidGasUsed(
+                block.header.gas_used,
+                expected_gas,
+            ));
+        }
+        let expected_base_fee = next_base_fee(tip.header.base_fee, tip.header.gas_used);
+        if block.header.base_fee != expected_base_fee {
+            return Err(ChainError::InvalidBaseFee(
+                block.header.base_fee,
+                expected_base_fee,
+            ));
+        }
+
+        // ── Coinbase reward ───────────────────────────────────────────────────
+        let max_reward = block_reward(block.header.height);
+        let coinbase_out: u64 = block.transactions[0].outputs.iter().map(|o| o.amount).sum();
+        if coinbase_out > max_reward {
+            return Err(ChainError::ExcessiveCoinbaseReward(coinbase_out, max_reward));
+        }
+
+        for tx in &block.transactions[1..] {
+            if tx.is_coinbase() {
+                return Err(ChainError::UnexpectedCoinbase);
+            } else if tx.is_reward_claim() {
+                self.validate_reward_claim(tx, registry)?;
+            } else if tx.is_slashing_report() {
+                self.validate_slashing_report(tx, registry)?;
+            } else {
+                self.utxo_set.validate_transfer(tx, block.header.height)?;
+            }
+        }
+
+        // ── Privacy validation ────────────────────────────────────────────────
+        if block.header.privacy_root != block.compute_privacy_root() {
+            return Err(ChainError::InvalidPrivacyRoot);
+        }
+        for tx in &block.privacy_txs {
+            tx.validate_stateless()?;
+            // Verify any real STARK spend proofs via Winterfell verifier.
+            for input in &tx.shielded_inputs {
+                if let SpendEvidence::Stark(sp) = &input.spend_evidence {
+                    let zk = rupeecoin_zkproof::StarkSpendProof {
+                        proof_bytes: sp.proof_bytes.clone(),
+                        anchor_felts: sp.anchor_felts,
+                    };
+                    rupeecoin_zkproof::verify_spend(&zk, sp.nullifier_felts)
+                        .map_err(|e| ChainError::InvalidStarkProof(e.to_string()))?;
+                }
+            }
+            tx.validate_stateful(&self.recent_roots, &self.spent_nullifiers)?;
+        }
+
+        // ── Consensus validation ──────────────────────────────────────────────
+        let slot = block.header.slot;
+        let active_count = registry.active_count();
+
+        if block.header.height > 0 {
+            if active_count > 0 {
+                // Active validator set: proposer signature AND VRF proof are both
+                // mandatory.  A block with either absent is unconditionally rejected.
+                let sig = block
+                    .proposer_signature
+                    .as_ref()
+                    .ok_or(ChainError::MissingProposerSignature)?;
+
+                let idx = block.header.proposer_index as usize;
+                if idx >= active_count {
+                    return Err(ChainError::ProposerIndexOutOfRange(
+                        block.header.proposer_index,
+                        active_count,
+                    ));
+                }
+                let expected_idx =
+                    select_proposer(slot, &tip.header.vrf_output, active_count) as u32;
+                if block.header.proposer_index != expected_idx {
+                    return Err(ChainError::InvalidProposerIndex(
+                        block.header.proposer_index,
+                        expected_idx,
+                        slot,
+                    ));
+                }
+                let &proposer_addr = registry.active_set().get(idx).unwrap();
+                if let Some(proposer) = registry.get(&proposer_addr) {
+                    proposer
+                        .pubkey
+                        .verify(block.hash().as_bytes(), sig)
+                        .map_err(|_| ChainError::InvalidProposerSignature)?;
+
+                    // vrf_proof must be present when validators are active.
+                    if block.vrf_proof.is_none() {
+                        return Err(ChainError::InvalidVrfProof(slot));
+                    }
+                    if !verify_block_vrf(block, &proposer.pubkey, &tip.header.vrf_output) {
+                        return Err(ChainError::InvalidVrfProof(slot));
+                    }
+                }
+            } else {
+                // Bootstrap (no validators yet): vrf_output must equal
+                // BLAKE3(prev_vrf_output || slot) so peers cannot freely choose it.
+                let mut buf = [0u8; 40];
+                buf[..32].copy_from_slice(tip.header.vrf_output.as_bytes());
+                buf[32..].copy_from_slice(&slot.to_le_bytes());
+                let expected_vrf = hash_data(&buf);
+                if block.header.vrf_output != expected_vrf {
+                    return Err(ChainError::InvalidVrfProof(slot));
+                }
+            }
+        }
+
+        Ok(())
+    }
+}
+
+// ── Private helpers ───────────────────────────────────────────────────────────
+
+fn slashed_validator_addr(evidence: &SlashingEvidence) -> Hash {
+    match evidence {
+        SlashingEvidence::DoubleProposal { proposer_pubkey, .. } => proposer_pubkey.to_hash(),
+        SlashingEvidence::DoubleVote { attestation_a, .. } => attestation_a.validator_pubkey.to_hash(),
+    }
+}
+
+impl Chain {
+    fn validate_reward_claim(
+        &self,
+        tx: &Transaction,
+        registry: &ValidatorRegistry,
+    ) -> Result<(), ChainError> {
+        let addr = tx.reward_claim_addr().ok_or_else(|| {
+            ChainError::InvalidRewardClaim("missing validator address in claim".into())
+        })?;
+        let v = registry
+            .get(&addr)
+            .ok_or_else(|| ChainError::InvalidRewardClaim(format!("validator {addr} not found")))?;
+        let claimable = v.claimable_rewards;
+        let claimed: u64 = tx.outputs.iter().map(|o| o.amount).sum();
+        if claimed > claimable {
+            return Err(ChainError::InvalidRewardClaim(format!(
+                "claimed {claimed} but only {claimable} available"
+            )));
+        }
+        Ok(())
+    }
+
+    fn validate_slashing_report(
+        &self,
+        tx: &Transaction,
+        registry: &ValidatorRegistry,
+    ) -> Result<(), ChainError> {
+        let evidence = tx.slashing_evidence().ok_or_else(|| {
+            ChainError::InvalidSlashingReport("malformed slashing evidence".into())
+        })?;
+
+        // Verify cryptographic signatures.
+        match &evidence {
+            SlashingEvidence::DoubleProposal {
+                proposer_pubkey,
+                block_hash_a,
+                sig_a,
+                block_hash_b,
+                sig_b,
+                ..
+            } => {
+                proposer_pubkey
+                    .verify(block_hash_a.as_bytes(), sig_a)
+                    .map_err(|_| ChainError::InvalidSlashingReport("invalid sig_a".into()))?;
+                proposer_pubkey
+                    .verify(block_hash_b.as_bytes(), sig_b)
+                    .map_err(|_| ChainError::InvalidSlashingReport("invalid sig_b".into()))?;
+            }
+            SlashingEvidence::DoubleVote {
+                attestation_a,
+                attestation_b,
+            } => {
+                if attestation_a.validator_pubkey != attestation_b.validator_pubkey {
+                    return Err(ChainError::InvalidSlashingReport(
+                        "attestations from different validators".into(),
+                    ));
+                }
+                let sd_a = Attestation::sig_data(attestation_a.slot, &attestation_a.block_hash);
+                attestation_a
+                    .validator_pubkey
+                    .verify(sd_a.as_bytes(), &attestation_a.signature)
+                    .map_err(|_| ChainError::InvalidSlashingReport("invalid attestation_a sig".into()))?;
+                let sd_b = Attestation::sig_data(attestation_b.slot, &attestation_b.block_hash);
+                attestation_b
+                    .validator_pubkey
+                    .verify(sd_b.as_bytes(), &attestation_b.signature)
+                    .map_err(|_| ChainError::InvalidSlashingReport("invalid attestation_b sig".into()))?;
+            }
+        }
+
+        let slashed_addr = slashed_validator_addr(&evidence);
+        let v = registry.get(&slashed_addr).ok_or_else(|| {
+            ChainError::InvalidSlashingReport(format!("validator {slashed_addr} not found"))
+        })?;
+        if v.status == ValidatorStatus::Slashed {
+            return Err(ChainError::InvalidSlashingReport(
+                "validator already slashed".into(),
+            ));
+        }
+        let reporter_reward = v.stake / 2;
+        let output_sum: u64 = tx.outputs.iter().map(|o| o.amount).sum();
+        if output_sum > reporter_reward {
+            return Err(ChainError::InvalidSlashingReport(format!(
+                "output {output_sum} exceeds 50% of stake ({reporter_reward})"
+            )));
+        }
+        Ok(())
+    }
+}
+
+// ── Transaction builders ──────────────────────────────────────────────────────
+
+pub fn build_coinbase(
+    height: u64,
+    proposer_pubkey: &PublicKey,
+    proposer_addr: &Hash,
+    registry: &ValidatorRegistry,
+) -> Transaction {
+    let split = compute_block_rewards(height, registry, proposer_addr);
+    Transaction {
+        version: 1,
+        chain_id: MAINNET_CHAIN_ID,
+        nonce: 0,
+        expiry: 0,
+        inputs: vec![],
+        outputs: vec![
+            TxOutput {
+                amount: split.proposer_reward,
+                recipient: proposer_pubkey.to_address(),
+            },
+            TxOutput {
+                amount: split.treasury_amount,
+                recipient: treasury_address(),
+            },
+        ],
+        coinbase_data: Some(height.to_le_bytes().to_vec()),
+    }
+}
+
+/// Build a reward-claim transaction.  The proposer claims all their accrued
+/// rewards and receives them as a UTXO at `output_addr`.
+pub fn build_reward_claim(
+    validator_addr: Hash,
+    amount: u64,
+    output_addr: rupeecoin_crypto::Address,
+) -> Transaction {
+    let mut data = b"RC\x01".to_vec();
+    data.extend_from_slice(validator_addr.as_bytes());
+    Transaction {
+        version: 1,
+        chain_id: MAINNET_CHAIN_ID,
+        nonce: 0,
+        expiry: 0,
+        inputs: vec![],
+        outputs: vec![TxOutput { amount, recipient: output_addr }],
+        coinbase_data: Some(data),
+    }
+}
+
+/// Build a slashing-report transaction.  The reporter (`reporter_addr`) will
+/// receive 50% of the slashed validator's stake as a UTXO output.
+pub fn build_slash_report(
+    evidence: &SlashingEvidence,
+    reporter_addr: rupeecoin_crypto::Address,
+    registry: &ValidatorRegistry,
+) -> Option<Transaction> {
+    let slashed_addr = slashed_validator_addr(evidence);
+    let stake = registry.get(&slashed_addr)?.stake;
+    if stake == 0 {
+        return None;
+    }
+    let reporter_reward = stake / 2;
+    let mut data = b"SR\x01".to_vec();
+    data.extend_from_slice(&bincode::serialize(evidence).ok()?);
+    Some(Transaction {
+        version: 1,
+        chain_id: MAINNET_CHAIN_ID,
+        nonce: 0,
+        expiry: 0,
+        inputs: vec![],
+        outputs: vec![TxOutput { amount: reporter_reward, recipient: reporter_addr }],
+        coinbase_data: Some(data),
+    })
+}
+
+pub fn build_transfer(
+    keypair: &KeyPair,
+    outpoints: Vec<OutPoint>,
+    outputs: Vec<TxOutput>,
+    chain_id: u32,
+    nonce: u64,
+    expiry: u64,
+) -> Transaction {
+    let mut tx = Transaction {
+        version: 1,
+        chain_id,
+        nonce,
+        expiry,
+        inputs: outpoints
+            .into_iter()
+            .map(|op| TxInput {
+                outpoint: op,
+                public_key: keypair.public_key.clone(),
+                signature: Signature::empty(),
+            })
+            .collect(),
+        outputs,
+        coinbase_data: None,
+    };
+    let sig_hash = tx.sig_hash();
+    let sig = keypair.sign(sig_hash.as_bytes());
+    for input in &mut tx.inputs {
+        input.signature = sig.clone();
+    }
+    tx
+}
+
+pub fn build_block(
+    chain: &Chain,
+    proposer_keypair: &KeyPair,
+    registry: &ValidatorRegistry,
+    attestations: Vec<Attestation>,
+    extra_txs: Vec<Transaction>,
+    privacy_txs: Vec<rupeecoin_privacy::PrivacyTransaction>,
+) -> Block {
+    let tip = chain.tip();
+    let height = tip.header.height + 1;
+    let slot = height;
+    let prev_hash = tip.hash();
+
+    let active_count = registry.active_count();
+    let proposer_index =
+        select_proposer(slot, &tip.header.vrf_output, active_count) as u32;
+    let proposer_addr = registry
+        .active_set()
+        .get(proposer_index as usize)
+        .copied()
+        .unwrap_or_else(Hash::zero);
+
+    let base_fee = next_base_fee(tip.header.base_fee, tip.header.gas_used);
+    let gas_used = extra_txs.len() as u64;
+
+    let coinbase = build_coinbase(height, &proposer_keypair.public_key, &proposer_addr, registry);
+    let mut transactions = vec![coinbase];
+    transactions.extend(extra_txs);
+    let mr = merkle_root(&transactions);
+
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(tip.header.timestamp + 4);
+
+    let privacy_root = privacy_merkle_root(&privacy_txs);
+
+    // ── VRF ───────────────────────────────────────────────────────────────────
+    let (vrf_output, vrf_proof) = if active_count > 0 {
+        let proof = VrfProof::generate(proposer_keypair, slot, &tip.header.vrf_output);
+        let output = proof.output;
+        (output, Some(proof.signature))
+    } else {
+        // Bootstrap: no validators registered yet — derive output deterministically.
+        let mut buf = [0u8; 40];
+        buf[..32].copy_from_slice(tip.header.vrf_output.as_bytes());
+        buf[32..].copy_from_slice(&slot.to_le_bytes());
+        (rupeecoin_crypto::hash_data(&buf), None)
+    };
+
+    // ── State root ────────────────────────────────────────────────────────────
+    let state_root = {
+        let mut snap = chain.utxo_set.clone();
+        snap.apply_transactions(&transactions);
+        snap.state_root()
+    };
+
+    let header = BlockHeader {
+        version: 1,
+        prev_hash,
+        merkle_root: mr,
+        timestamp,
+        height,
+        slot,
+        proposer_index,
+        privacy_root,
+        base_fee,
+        gas_used,
+        state_root,
+        vrf_output,
+    };
+
+    let mut block = Block {
+        header,
+        transactions,
+        attestations,
+        proposer_signature: None,
+        privacy_txs,
+        vrf_proof,
+    };
+
+    if active_count >= 1 {
+        let block_hash = block.hash();
+        block.proposer_signature = Some(proposer_keypair.sign(block_hash.as_bytes()));
+    }
+
+    block
+}

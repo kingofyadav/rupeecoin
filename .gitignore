@@ -1,0 +1,58 @@
+# Rust
+/target/
+desktop-wallet/target/
+mobile-wallet/rust/target/
+
+# Cargo lock at workspace level only
+# (keep Cargo.lock for binaries, ignore for libs)
+
+# Node data
+rupeecoin-data/
+
+# Wallet keystores
+wallet.json
+faucet-key.json
+*.keystore
+
+# Python build artifacts
+sdk-py/target/
+sdk-py/*.so
+sdk-py/dist/
+sdk-py/*.egg-info/
+__pycache__/
+*.pyc
+
+# Node.js
+sdk-js/node_modules/
+sdk-js/dist/
+
+# Flutter / Android build
+mobile-wallet/build/
+mobile-wallet/.dart_tool/
+mobile-wallet/.flutter-plugins
+mobile-wallet/.flutter-plugins-dependencies
+mobile-wallet/android/.gradle/
+mobile-wallet/android/local.properties
+mobile-wallet/android/app/debug/
+mobile-wallet/android/app/release/
+mobile-wallet/pubspec.lock
+mobile-wallet/rust/src/frb_generated.rs
+
+# Desktop wallet build
+desktop-wallet/target/
+
+# Tauri
+.tauri/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Memory snapshots
+.claude/

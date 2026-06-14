@@ -1,0 +1,12 @@
+[package]
+name    = "rupeecoin-types"
+version = "0.3.0"
+edition = "2021"
+
+[dependencies]
+rupeecoin-crypto   = { path = "../crypto" }
+rupeecoin-privacy  = { path = "../privacy" }
+serde              = { workspace = true }
+bincode            = { workspace = true }
+thiserror          = { workspace = true }
+hex                = { workspace = true }

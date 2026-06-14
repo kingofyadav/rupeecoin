@@ -1,0 +1,663 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>RupeeCoin Wallet</title>
+  <style>
+    :root {
+      --bg: #0d1117; --bg2: #161b22; --bg3: #21262d;
+      --border: #30363d; --text: #e6edf3; --muted: #8b949e;
+      --accent: #f78166; --green: #3fb950; --red: #f85149;
+      --yellow: #d29922; --blue: #58a6ff;
+      --radius: 8px; --mono: 'JetBrains Mono', 'Fira Code', monospace;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: var(--bg); color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-size: 14px; line-height: 1.6;
+      height: 100vh; display: flex; flex-direction: column;
+    }
+
+    /* ── Header ── */
+    header {
+      background: var(--bg2); border-bottom: 1px solid var(--border);
+      padding: 0 20px; display: flex; align-items: center; gap: 12px;
+      height: 48px; flex-shrink: 0;
+    }
+    header .logo { font-weight: 700; color: var(--accent); font-size: 16px; }
+    header .network-badge {
+      background: var(--bg3); border: 1px solid var(--border);
+      color: var(--yellow); font-size: 11px; font-weight: 600;
+      padding: 2px 8px; border-radius: 20px; letter-spacing: 0.5px;
+    }
+    header .spacer { flex: 1; }
+    header .node-status {
+      font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 6px;
+    }
+    header .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
+    header .dot.ok { background: var(--green); }
+
+    /* ── Layout ── */
+    .app { display: flex; flex: 1; overflow: hidden; }
+    nav {
+      width: 200px; background: var(--bg2); border-right: 1px solid var(--border);
+      padding: 16px 0; display: flex; flex-direction: column; gap: 2px; flex-shrink: 0;
+    }
+    nav a {
+      display: flex; align-items: center; gap: 10px;
+      padding: 8px 16px; color: var(--muted); text-decoration: none;
+      border-radius: 0; cursor: pointer; font-size: 13px;
+    }
+    nav a:hover { color: var(--text); background: var(--bg3); }
+    nav a.active { color: var(--text); background: var(--bg3); border-right: 2px solid var(--accent); }
+    nav .nav-icon { font-size: 16px; width: 20px; text-align: center; }
+
+    main { flex: 1; overflow-y: auto; padding: 24px; }
+
+    /* ── Panels ── */
+    .panel { display: none; }
+    .panel.active { display: block; }
+
+    /* ── Cards ── */
+    .card {
+      background: var(--bg2); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 20px; margin-bottom: 16px;
+    }
+    .card-title {
+      font-size: 12px; font-weight: 600; text-transform: uppercase;
+      letter-spacing: 0.8px; color: var(--muted); margin-bottom: 12px;
+    }
+
+    /* ── Balance display ── */
+    .balance-display {
+      font-size: 36px; font-weight: 700; color: var(--text); letter-spacing: -1px;
+    }
+    .balance-unit { font-size: 16px; color: var(--muted); margin-left: 6px; }
+    .balance-micro { font-size: 11px; color: var(--muted); margin-top: 4px; font-family: var(--mono); }
+
+    /* ── Address display ── */
+    .address-box {
+      background: var(--bg3); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 10px 14px;
+      font-family: var(--mono); font-size: 12px; word-break: break-all;
+      display: flex; align-items: center; gap: 8px; cursor: pointer;
+    }
+    .address-box:hover { border-color: var(--blue); }
+    .address-box .copy-btn { margin-left: auto; color: var(--muted); font-size: 14px; }
+    .address-box:hover .copy-btn { color: var(--blue); }
+    .copy-hint { font-size: 11px; color: var(--muted); margin-top: 6px; }
+
+    /* ── Forms ── */
+    .form-group { margin-bottom: 14px; }
+    label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+    input, select {
+      width: 100%; background: var(--bg3); border: 1px solid var(--border);
+      color: var(--text); border-radius: var(--radius); padding: 8px 12px;
+      font-size: 13px; outline: none; font-family: inherit;
+    }
+    input:focus, select:focus { border-color: var(--blue); }
+    input[type=password] { letter-spacing: 2px; }
+
+    /* ── Buttons ── */
+    .btn {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 8px 16px; border-radius: var(--radius); border: none;
+      font-size: 13px; font-weight: 600; cursor: pointer; transition: opacity 0.15s;
+    }
+    .btn:hover { opacity: 0.88; }
+    .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    .btn-primary { background: var(--accent); color: #fff; }
+    .btn-secondary {
+      background: var(--bg3); color: var(--text); border: 1px solid var(--border);
+    }
+    .btn-success { background: var(--green); color: #0d1117; }
+    .btn-full { width: 100%; justify-content: center; }
+
+    /* ── Status / alerts ── */
+    .alert {
+      padding: 10px 14px; border-radius: var(--radius); font-size: 13px;
+      margin-top: 12px; display: none;
+    }
+    .alert.show { display: block; }
+    .alert-ok { background: rgba(63,185,80,.15); border: 1px solid rgba(63,185,80,.4); color: var(--green); }
+    .alert-err { background: rgba(248,81,73,.15); border: 1px solid rgba(248,81,73,.4); color: var(--red); }
+    .alert-info { background: rgba(88,166,255,.12); border: 1px solid rgba(88,166,255,.3); color: var(--blue); }
+
+    /* ── Welcome screen ── */
+    .welcome {
+      max-width: 480px; margin: 40px auto; text-align: center;
+    }
+    .welcome .logo-big { font-size: 48px; margin-bottom: 12px; }
+    .welcome h1 { font-size: 24px; font-weight: 700; margin-bottom: 8px; }
+    .welcome p { color: var(--muted); margin-bottom: 28px; }
+    .welcome .actions { display: flex; gap: 12px; justify-content: center; }
+
+    /* ── Tabs ── */
+    .tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--border); margin-bottom: 20px; }
+    .tab {
+      padding: 8px 16px; color: var(--muted); cursor: pointer; font-size: 13px;
+      border-bottom: 2px solid transparent; margin-bottom: -1px;
+    }
+    .tab.active { color: var(--text); border-bottom-color: var(--accent); }
+
+    /* ── UTXO list ── */
+    .utxo-list { display: flex; flex-direction: column; gap: 8px; }
+    .utxo-item {
+      background: var(--bg3); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 10px 14px;
+      display: flex; align-items: center; gap: 10px;
+    }
+    .utxo-amount { font-weight: 700; color: var(--green); font-family: var(--mono); }
+    .utxo-id { font-size: 11px; color: var(--muted); font-family: var(--mono); flex: 1; overflow: hidden; text-overflow: ellipsis; }
+
+    /* ── Tx history ── */
+    .tx-row { font-size: 12px; color: var(--muted); font-family: var(--mono); padding: 8px 0; border-bottom: 1px solid var(--border); }
+    .tx-row:last-child { border-bottom: none; }
+    .tx-id { color: var(--blue); }
+
+    /* ── Settings ── */
+    .setting-row {
+      display: flex; align-items: center; padding: 12px 0;
+      border-bottom: 1px solid var(--border);
+    }
+    .setting-row:last-child { border-bottom: none; }
+    .setting-label { font-size: 13px; flex: 1; }
+    .setting-value { font-size: 12px; color: var(--muted); font-family: var(--mono); }
+
+    /* ── Spinner ── */
+    .spinner {
+      display: inline-block; width: 14px; height: 14px;
+      border: 2px solid rgba(255,255,255,0.3); border-top-color: #fff;
+      border-radius: 50%; animation: spin 0.7s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── Mono values ── */
+    .mono { font-family: var(--mono); }
+    .muted { color: var(--muted); }
+    .green { color: var(--green); }
+    .red { color: var(--red); }
+  </style>
+</head>
+<body>
+
+<!-- Header (hidden until unlocked) -->
+<header id="app-header" style="display:none">
+  <span class="logo">₹ RupeeCoin</span>
+  <span class="network-badge">TESTNET</span>
+  <div class="spacer"></div>
+  <div class="node-status">
+    <div class="dot" id="node-dot"></div>
+    <span id="node-label">Connecting…</span>
+  </div>
+</header>
+
+<!-- Welcome / lock screen -->
+<div id="welcome-screen" class="app" style="display:flex; align-items:center; justify-content:center; background: var(--bg);">
+  <div class="welcome">
+    <div class="logo-big">₹</div>
+    <h1>RupeeCoin Wallet</h1>
+    <p>Post-quantum · Privacy-native · Testnet</p>
+
+    <div class="tabs" style="justify-content:center; margin-bottom:24px;">
+      <div class="tab active" id="tab-unlock" onclick="showTab('unlock')">Unlock Wallet</div>
+      <div class="tab" id="tab-create" onclick="showTab('create')">Create New</div>
+    </div>
+
+    <!-- Unlock -->
+    <div id="pane-unlock">
+      <div class="form-group">
+        <label>Keystore File Path</label>
+        <input type="text" id="unlock-path" value="wallet.json" placeholder="wallet.json" />
+      </div>
+      <div class="form-group">
+        <label>Passphrase</label>
+        <input type="password" id="unlock-pass" placeholder="Enter your passphrase" />
+      </div>
+      <button class="btn btn-primary btn-full" onclick="doUnlock()" id="unlock-btn">
+        Unlock Wallet
+      </button>
+      <div class="alert" id="unlock-err"></div>
+    </div>
+
+    <!-- Create -->
+    <div id="pane-create" style="display:none">
+      <div class="form-group">
+        <label>Keystore File Path</label>
+        <input type="text" id="create-path" value="wallet.json" placeholder="wallet.json" />
+      </div>
+      <div class="form-group">
+        <label>Passphrase</label>
+        <input type="password" id="create-pass" placeholder="Choose a strong passphrase" />
+      </div>
+      <div class="form-group">
+        <label>Confirm Passphrase</label>
+        <input type="password" id="create-pass2" placeholder="Repeat passphrase" />
+      </div>
+      <button class="btn btn-success btn-full" onclick="doCreate()" id="create-btn">
+        Generate New Wallet
+      </button>
+      <div class="alert" id="create-msg"></div>
+    </div>
+  </div>
+</div>
+
+<!-- Main app (shown after unlock) -->
+<div id="main-app" class="app" style="display:none">
+  <nav>
+    <a class="active" onclick="showPanel('portfolio')" id="nav-portfolio">
+      <span class="nav-icon">◈</span> Portfolio
+    </a>
+    <a onclick="showPanel('send')" id="nav-send">
+      <span class="nav-icon">↗</span> Send
+    </a>
+    <a onclick="showPanel('receive')" id="nav-receive">
+      <span class="nav-icon">↙</span> Receive
+    </a>
+    <a onclick="showPanel('utxos')" id="nav-utxos">
+      <span class="nav-icon">≡</span> UTXOs
+    </a>
+    <a onclick="showPanel('settings')" id="nav-settings">
+      <span class="nav-icon">⚙</span> Settings
+    </a>
+  </nav>
+
+  <main>
+
+    <!-- Portfolio panel -->
+    <div class="panel active" id="panel-portfolio">
+      <div class="card">
+        <div class="card-title">Transparent Balance</div>
+        <div class="balance-display">
+          <span id="bal-rpc">—</span><span class="balance-unit">RPC</span>
+        </div>
+        <div class="balance-micro" id="bal-micro"></div>
+      </div>
+      <div class="card">
+        <div class="card-title">Receive Address</div>
+        <div class="address-box" onclick="copyAddress()" title="Click to copy">
+          <span id="addr-display">…</span>
+          <span class="copy-btn">⧉</span>
+        </div>
+        <div class="copy-hint">Click to copy · <a href="#" style="color:var(--blue)" onclick="doAdvanceAddress()">Generate new address</a></div>
+      </div>
+      <div class="card">
+        <div class="card-title">Network</div>
+        <div class="setting-row">
+          <span class="setting-label">Block height</span>
+          <span class="setting-value mono" id="net-height">—</span>
+        </div>
+        <div class="setting-row">
+          <span class="setting-label">Node</span>
+          <span class="setting-value mono" id="net-node">—</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Send panel -->
+    <div class="panel" id="panel-send">
+      <div class="card">
+        <div class="card-title">Send RPC</div>
+        <div class="form-group">
+          <label>Recipient Address (Base58Check starting with 'a')</label>
+          <input type="text" id="send-to" placeholder="aHBuLw…" />
+        </div>
+        <div class="form-group">
+          <label>Amount (RPC)</label>
+          <input type="number" id="send-amount" placeholder="10.0" min="0.00000001" step="any" />
+        </div>
+        <div class="form-group">
+          <label>Fee Note</label>
+          <p class="muted" style="font-size:12px; margin-top:4px;">
+            Fee = input_sum − output_sum (implicit, burned). No explicit fee field.
+            Use a small amount to ensure inputs cover output.
+          </p>
+        </div>
+        <div class="form-group">
+          <label>Wallet Passphrase (to sign)</label>
+          <input type="password" id="send-pass" placeholder="Enter passphrase" />
+        </div>
+        <button class="btn btn-primary" onclick="doSend()" id="send-btn">Send Transaction</button>
+        <div class="alert" id="send-result"></div>
+      </div>
+    </div>
+
+    <!-- Receive panel -->
+    <div class="panel" id="panel-receive">
+      <div class="card">
+        <div class="card-title">Your Receive Address</div>
+        <div class="address-box" onclick="copyAddress()" style="margin-bottom:12px;">
+          <span id="recv-addr-display">…</span>
+          <span class="copy-btn">⧉</span>
+        </div>
+        <p class="muted" style="font-size:12px; margin-bottom:16px;">
+          Share this Base58Check address to receive transparent RPC.
+          Click the address to copy it.
+        </p>
+        <button class="btn btn-secondary" onclick="doAdvanceAddress()">Generate Next Address</button>
+        <div class="alert" id="recv-msg"></div>
+      </div>
+    </div>
+
+    <!-- UTXOs panel -->
+    <div class="panel" id="panel-utxos">
+      <div class="card">
+        <div class="card-title">Unspent Outputs</div>
+        <div id="utxo-list" class="utxo-list">
+          <p class="muted">Loading…</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Settings panel -->
+    <div class="panel" id="panel-settings">
+      <div class="card">
+        <div class="card-title">Node Settings</div>
+        <div class="form-group">
+          <label>Node RPC URL</label>
+          <input type="text" id="setting-rpc" placeholder="http://127.0.0.1:9944" />
+        </div>
+        <div class="form-group">
+          <label>Chain ID</label>
+          <select id="setting-chain-id">
+            <option value="2" selected>2 — Testnet (Zeta)</option>
+            <option value="1">1 — Mainnet (future)</option>
+          </select>
+        </div>
+        <button class="btn btn-secondary" onclick="saveSettings()">Save Settings</button>
+        <div class="alert" id="settings-msg"></div>
+      </div>
+      <div class="card">
+        <div class="card-title">Wallet Info</div>
+        <div class="setting-row">
+          <span class="setting-label">Keystore path</span>
+          <span class="setting-value mono" id="info-ks-path">—</span>
+        </div>
+        <div class="setting-row">
+          <span class="setting-label">HD receive index</span>
+          <span class="setting-value mono" id="info-hd-index">—</span>
+        </div>
+        <div class="setting-row">
+          <span class="setting-label">Version</span>
+          <span class="setting-value mono">0.1.0 — Testnet</span>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-title">Actions</div>
+        <button class="btn btn-secondary" onclick="doLock()" style="margin-right:8px;">Lock Wallet</button>
+        <button class="btn btn-secondary" onclick="refreshAll()">Refresh</button>
+      </div>
+    </div>
+
+  </main>
+</div>
+
+<script>
+const { invoke } = window.__TAURI__.tauri;
+
+// ── App state ────────────────────────────────────────────────────────────
+let state = {
+  address: '',
+  addressHex: '',
+  keystorePath: '',
+  receiveIndex: 0,
+  rpcUrl: 'http://127.0.0.1:9944',
+  chainId: 2,
+};
+
+// ── Local storage settings ────────────────────────────────────────────────
+function loadSettings() {
+  state.rpcUrl = localStorage.getItem('rpcUrl') || 'http://127.0.0.1:9944';
+  state.chainId = parseInt(localStorage.getItem('chainId') || '2');
+}
+
+function saveSettings() {
+  state.rpcUrl = document.getElementById('setting-rpc').value.trim() || 'http://127.0.0.1:9944';
+  state.chainId = parseInt(document.getElementById('setting-chain-id').value);
+  localStorage.setItem('rpcUrl', state.rpcUrl);
+  localStorage.setItem('chainId', String(state.chainId));
+  showAlert('settings-msg', 'ok', 'Settings saved.');
+  updateNodeStatus();
+}
+
+// ── Tab switching (welcome screen) ────────────────────────────────────────
+function showTab(name) {
+  ['unlock','create'].forEach(t => {
+    document.getElementById(`tab-${t}`).classList.toggle('active', t === name);
+    document.getElementById(`pane-${t}`).style.display = t === name ? 'block' : 'none';
+  });
+}
+
+// ── Panel navigation ──────────────────────────────────────────────────────
+function showPanel(name) {
+  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('nav a').forEach(a => a.classList.remove('active'));
+  document.getElementById(`panel-${name}`).classList.add('active');
+  document.getElementById(`nav-${name}`).classList.add('active');
+  if (name === 'utxos') loadUtxos();
+}
+
+// ── Alert helper ──────────────────────────────────────────────────────────
+function showAlert(id, type, msg) {
+  const el = document.getElementById(id);
+  el.className = `alert show alert-${type}`;
+  el.textContent = msg;
+  if (type === 'ok') setTimeout(() => el.classList.remove('show'), 4000);
+}
+
+// ── Create wallet ─────────────────────────────────────────────────────────
+async function doCreate() {
+  const path = document.getElementById('create-path').value.trim();
+  const pass = document.getElementById('create-pass').value;
+  const pass2 = document.getElementById('create-pass2').value;
+  if (!path) return showAlert('create-msg', 'err', 'Keystore path is required.');
+  if (!pass) return showAlert('create-msg', 'err', 'Passphrase is required.');
+  if (pass !== pass2) return showAlert('create-msg', 'err', 'Passphrases do not match.');
+
+  const btn = document.getElementById('create-btn');
+  btn.disabled = true; btn.innerHTML = '<div class="spinner"></div> Generating…';
+
+  try {
+    const info = await invoke('generate_wallet', { passphrase: pass, keystorePath: path });
+    showAlert('create-msg', 'ok', `Wallet created! Address: ${info.address}`);
+    enterApp(info);
+  } catch(e) {
+    showAlert('create-msg', 'err', String(e));
+  } finally {
+    btn.disabled = false; btn.textContent = 'Generate New Wallet';
+  }
+}
+
+// ── Unlock wallet ─────────────────────────────────────────────────────────
+async function doUnlock() {
+  const path = document.getElementById('unlock-path').value.trim();
+  const pass = document.getElementById('unlock-pass').value;
+  if (!path) return showAlert('unlock-err', 'err', 'Keystore path is required.');
+  if (!pass) return showAlert('unlock-err', 'err', 'Passphrase is required.');
+
+  const btn = document.getElementById('unlock-btn');
+  btn.disabled = true; btn.innerHTML = '<div class="spinner"></div> Decrypting…';
+
+  try {
+    const info = await invoke('unlock_wallet', { passphrase: pass, keystorePath: path });
+    enterApp(info);
+  } catch(e) {
+    showAlert('unlock-err', 'err', String(e));
+  } finally {
+    btn.disabled = false; btn.textContent = 'Unlock Wallet';
+  }
+}
+
+// ── Enter main app ─────────────────────────────────────────────────────────
+function enterApp(info) {
+  state.address = info.address;
+  state.addressHex = info.address_hex;
+  state.keystorePath = info.keystore_path;
+  state.receiveIndex = info.receive_index;
+
+  document.getElementById('welcome-screen').style.display = 'none';
+  document.getElementById('app-header').style.display = 'flex';
+  document.getElementById('main-app').style.display = 'flex';
+
+  updateAddressDisplays();
+  document.getElementById('setting-rpc').value = state.rpcUrl;
+  document.getElementById('setting-chain-id').value = String(state.chainId);
+  document.getElementById('info-ks-path').textContent = state.keystorePath;
+  document.getElementById('info-hd-index').textContent = String(state.receiveIndex);
+
+  refreshAll();
+}
+
+// ── Lock wallet ────────────────────────────────────────────────────────────
+function doLock() {
+  document.getElementById('main-app').style.display = 'none';
+  document.getElementById('app-header').style.display = 'none';
+  document.getElementById('welcome-screen').style.display = 'flex';
+  document.getElementById('unlock-pass').value = '';
+  state = { address:'', addressHex:'', keystorePath:'', receiveIndex:0,
+            rpcUrl: state.rpcUrl, chainId: state.chainId };
+}
+
+// ── Address helpers ────────────────────────────────────────────────────────
+function updateAddressDisplays() {
+  document.getElementById('addr-display').textContent = state.address;
+  document.getElementById('recv-addr-display').textContent = state.address;
+  document.getElementById('net-node').textContent = state.rpcUrl;
+  document.getElementById('info-hd-index').textContent = String(state.receiveIndex);
+}
+
+function copyAddress() {
+  navigator.clipboard.writeText(state.address).then(() => {
+    showAlert('create-msg', 'ok', ''); // cheap effect
+  }).catch(() => {});
+}
+
+// ── Advance address ────────────────────────────────────────────────────────
+async function doAdvanceAddress() {
+  const pass = prompt('Enter passphrase to advance address:');
+  if (!pass) return;
+  try {
+    const info = await invoke('advance_address', {
+      passphrase: pass,
+      keystorePath: state.keystorePath,
+    });
+    state.address = info.address;
+    state.addressHex = info.address_hex;
+    state.receiveIndex = info.receive_index;
+    updateAddressDisplays();
+    showAlert('recv-msg', 'ok', `New address generated (index ${info.receive_index})`);
+  } catch(e) {
+    showAlert('recv-msg', 'err', String(e));
+  }
+}
+
+// ── Refresh ────────────────────────────────────────────────────────────────
+async function refreshAll() {
+  updateNodeStatus();
+  await refreshBalance();
+}
+
+async function updateNodeStatus() {
+  try {
+    const h = await invoke('get_height', { rpcUrl: state.rpcUrl });
+    document.getElementById('node-dot').className = 'dot ok';
+    document.getElementById('node-label').textContent = `Block ${h}`;
+    document.getElementById('net-height').textContent = String(h);
+  } catch {
+    document.getElementById('node-dot').className = 'dot';
+    document.getElementById('node-label').textContent = 'Node offline';
+  }
+}
+
+async function refreshBalance() {
+  if (!state.addressHex) return;
+  try {
+    const info = await invoke('get_balance', {
+      addrHex: state.addressHex,
+      rpcUrl: state.rpcUrl,
+    });
+    document.getElementById('bal-rpc').textContent = info.balance_rpc.toFixed(4);
+    document.getElementById('bal-micro').textContent = `${info.balance_micro.toLocaleString()} µRPC · ${info.utxo_count} UTXO(s)`;
+  } catch (e) {
+    document.getElementById('bal-rpc').textContent = 'error';
+  }
+}
+
+// ── Load UTXOs ─────────────────────────────────────────────────────────────
+async function loadUtxos() {
+  const el = document.getElementById('utxo-list');
+  el.innerHTML = '<p class="muted">Loading…</p>';
+  if (!state.addressHex) return;
+
+  try {
+    const info = await invoke('get_balance', {
+      addrHex: state.addressHex, rpcUrl: state.rpcUrl,
+    });
+    // get_balance doesn't return individual UTXOs; fetch them directly
+    const resp = await fetch(`${state.rpcUrl}/rpc/utxos?addr=${state.addressHex}`);
+    const utxos = await resp.json();
+    if (!Array.isArray(utxos) || utxos.length === 0) {
+      el.innerHTML = '<p class="muted">No UTXOs found for this address.</p>';
+      return;
+    }
+    el.innerHTML = utxos.map(u => `
+      <div class="utxo-item">
+        <span class="utxo-amount">${(u.amount_micro / 1e8).toFixed(4)} RPC</span>
+        <span class="utxo-id">${u.txid.slice(0,16)}…:${u.vout}</span>
+        <span class="muted" style="font-size:11px;">${u.amount_micro.toLocaleString()} µ</span>
+      </div>
+    `).join('');
+  } catch(e) {
+    el.innerHTML = `<p class="red">${e}</p>`;
+  }
+}
+
+// ── Send transaction ───────────────────────────────────────────────────────
+async function doSend() {
+  const to = document.getElementById('send-to').value.trim();
+  const amount = parseFloat(document.getElementById('send-amount').value);
+  const pass = document.getElementById('send-pass').value;
+
+  if (!to) return showAlert('send-result', 'err', 'Recipient address is required.');
+  if (!amount || amount <= 0) return showAlert('send-result', 'err', 'Amount must be > 0.');
+  if (!pass) return showAlert('send-result', 'err', 'Passphrase is required.');
+
+  const btn = document.getElementById('send-btn');
+  btn.disabled = true; btn.innerHTML = '<div class="spinner"></div> Broadcasting…';
+  document.getElementById('send-result').classList.remove('show');
+
+  try {
+    const txid = await invoke('send_transaction', {
+      keystorePath: state.keystorePath,
+      passphrase: pass,
+      toAddress: to,
+      amountRpc: amount,
+      rpcUrl: state.rpcUrl,
+      chainId: state.chainId,
+    });
+    showAlert('send-result', 'ok', `Sent! TxID: ${txid}`);
+    document.getElementById('send-to').value = '';
+    document.getElementById('send-amount').value = '';
+    document.getElementById('send-pass').value = '';
+    await refreshBalance();
+  } catch(e) {
+    showAlert('send-result', 'err', String(e));
+  } finally {
+    btn.disabled = false; btn.textContent = 'Send Transaction';
+  }
+}
+
+// ── Init ────────────────────────────────────────────────────────────────────
+window.addEventListener('DOMContentLoaded', () => {
+  loadSettings();
+  document.getElementById('setting-rpc').value = state.rpcUrl;
+  // Auto-refresh every 15 s when app is unlocked
+  setInterval(() => {
+    if (state.address) refreshAll();
+  }, 15000);
+});
+</script>
+</body>
+</html>

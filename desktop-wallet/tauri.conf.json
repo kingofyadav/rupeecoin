@@ -1,0 +1,33 @@
+{
+  "productName": "RupeeCoin Wallet",
+  "version": "0.1.0",
+  "identifier": "network.rupeecoin.wallet",
+  "build": {
+    "frontendDist": "frontend"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "RupeeCoin Wallet",
+        "width": 960,
+        "height": 720,
+        "minWidth": 760,
+        "minHeight": 560,
+        "resizable": true,
+        "fullscreen": false
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [],
+    "category": "Finance",
+    "shortDescription": "RupeeCoin testnet wallet",
+    "longDescription": "Post-quantum, privacy-native testnet wallet for the RupeeCoin network."
+  }
+}

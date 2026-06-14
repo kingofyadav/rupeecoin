@@ -1,0 +1,52 @@
+[workspace]
+# Standalone workspace — not a member of the root RupeeCoin workspace.
+# Keeps Tauri/Flutter system deps out of the main cargo build.
+
+[package]
+name  = "rupeecoin-mobile-bridge"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name       = "rupeecoin_mobile_bridge"
+crate-type = ["cdylib", "staticlib"]
+
+[dependencies]
+# RupeeCoin core (path deps into parent monorepo)
+rupeecoin-sdk    = { path = "../../rupeecoin-sdk" }
+rupeecoin-crypto = { path = "../../core/crypto" }
+rupeecoin-types  = { path = "../../core/types" }
+
+# FRB 2.x runtime — proc-macro only at this stage; generated glue added by codegen
+flutter_rust_bridge = "2"
+
+# Crypto (keystore)
+argon2           = "0.5"
+chacha20poly1305 = "0.10"
+rand             = "0.8"
+
+# Utilities
+hex        = "0.4"
+serde      = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow     = "1"
+
+[dev-dependencies]
+tempfile = "3"
+
+# ── Build notes ────────────────────────────────────────────────────────────────
+# Step 1 — verify Rust compiles (no Android SDK needed):
+#   cd mobile-wallet/rust && cargo build && cargo test
+#
+# Step 2 — install toolchain + generate Dart/Rust glue:
+#   rustup target add aarch64-linux-android
+#   cargo install flutter_rust_bridge_codegen
+#   cd mobile-wallet && flutter_rust_bridge_codegen generate
+#
+# Step 3 — build Android APK:
+#   flutter pub get
+#   flutter build apk --release
+#
+# System deps (Linux host for cross-compilation):
+#   sudo apt install android-sdk  (or install Android Studio)
+#   export ANDROID_NDK_HOME=<path>

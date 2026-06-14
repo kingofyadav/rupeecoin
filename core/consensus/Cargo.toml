@@ -1,0 +1,11 @@
+[package]
+name    = "rupeecoin-consensus"
+version = "0.3.0"
+edition = "2021"
+
+[dependencies]
+rupeecoin-crypto  = { path = "../crypto" }
+rupeecoin-types   = { path = "../types" }
+rupeecoin-staking = { path = "../staking" }
+thiserror         = { workspace = true }
+serde             = { workspace = true }

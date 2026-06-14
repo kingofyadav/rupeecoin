@@ -1,0 +1,18 @@
+[workspace]
+
+[package]
+name    = "rupeecoin-py"
+version = "0.3.0"
+edition = "2021"
+
+[lib]
+name       = "rupeecoin"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3              = { version = "0.22", features = ["extension-module"] }
+rupeecoin-sdk     = { path = "../rupeecoin-sdk" }
+rupeecoin-types   = { path = "../core/types" }
+rupeecoin-crypto  = { path = "../core/crypto" }
+hex               = "0.4"
+bincode           = "1"

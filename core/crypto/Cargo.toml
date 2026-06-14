@@ -1,0 +1,20 @@
+[package]
+name    = "rupeecoin-crypto"
+version = "0.3.0"
+edition = "2021"
+
+[build-dependencies]
+cc = "1"
+
+[dependencies]
+blake3             = { workspace = true }
+pqcrypto-dilithium = { workspace = true }
+pqcrypto-traits    = { workspace = true }
+serde              = { workspace = true }
+thiserror          = { workspace = true }
+hex                = { workspace = true }
+bincode            = { workspace = true }
+bs58               = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }

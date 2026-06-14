@@ -1,0 +1,29 @@
+[package]
+name    = "rupeecoin-wallet"
+version = "0.3.0"
+edition = "2021"
+
+[[bin]]
+name = "rupeecoin-wallet"
+path = "src/main.rs"
+
+[dependencies]
+rupeecoin-crypto   = { path = "../core/crypto" }
+rupeecoin-privacy  = { path = "../core/privacy" }
+rupeecoin-types    = { path = "../core/types" }
+rupeecoin-zkproof  = { path = "../core/zkproof" }
+clap              = { workspace = true }
+serde             = { workspace = true }
+serde_json        = { workspace = true }
+bincode           = { workspace = true }
+hex               = { workspace = true }
+rand              = { workspace = true }
+thiserror         = { workspace = true }
+anyhow            = { workspace = true }
+argon2            = { workspace = true }
+chacha20poly1305  = { workspace = true }
+rpassword         = { workspace = true }
+bs58              = { workspace = true }
+ureq              = { workspace = true }
+pqcrypto-kyber    = { workspace = true }
+pqcrypto-traits   = { workspace = true }

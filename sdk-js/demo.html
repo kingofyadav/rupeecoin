@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RupeeCoin JS SDK Demo</title>
+<style>
+  :root {
+    --bg: #0d1117; --surface: #161b22; --border: #30363d;
+    --text: #c9d1d9; --muted: #8b949e; --accent: #58a6ff;
+    --green: #3fb950; --red: #f85149; --yellow: #d29922;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font: 14px/1.5 'Cascadia Code', 'Fira Code', monospace; padding: 24px; }
+  h1 { color: var(--accent); font-size: 20px; margin-bottom: 4px; }
+  .subtitle { color: var(--muted); margin-bottom: 24px; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 16px; }
+  .card h2 { font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; margin-bottom: 12px; }
+  .kv { display: flex; justify-content: space-between; margin-bottom: 6px; }
+  .kv .k { color: var(--muted); }
+  .kv .v { color: var(--text); text-align: right; max-width: 60%; overflow-wrap: anywhere; }
+  label { display: block; color: var(--muted); font-size: 12px; margin-bottom: 4px; margin-top: 10px; }
+  input, textarea {
+    width: 100%; background: var(--bg); border: 1px solid var(--border);
+    color: var(--text); border-radius: 4px; padding: 6px 8px; font: inherit;
+  }
+  textarea { resize: vertical; min-height: 80px; }
+  button {
+    margin-top: 12px; padding: 7px 16px; border: none; border-radius: 4px;
+    background: var(--accent); color: #0d1117; font: inherit; font-weight: 600;
+    cursor: pointer;
+  }
+  button:disabled { opacity: .45; cursor: default; }
+  button.danger { background: var(--red); color: #fff; }
+  .status { margin-top: 10px; font-size: 12px; padding: 6px 10px; border-radius: 4px; display: none; }
+  .status.ok  { background: #1a3a22; border: 1px solid var(--green); color: var(--green); display: block; }
+  .status.err { background: #3a1a1a; border: 1px solid var(--red);   color: var(--red);   display: block; }
+  .status.inf { background: #1a2a3a; border: 1px solid var(--accent); color: var(--accent); display: block; }
+  #rpc-url-row { display: flex; gap: 8px; align-items: flex-end; margin-bottom: 16px; }
+  #rpc-url-row input { flex: 1; }
+  #rpc-url-row button { margin-top: 0; }
+  pre { background: var(--bg); border: 1px solid var(--border); border-radius: 4px;
+        padding: 10px; overflow-x: auto; font-size: 12px; color: var(--muted); }
+  .tag { display: inline-block; padding: 1px 6px; border-radius: 4px; font-size: 11px; font-weight: 600; }
+  .tag.green { background: #1a3a22; color: var(--green); }
+  .tag.red   { background: #3a1a1a; color: var(--red); }
+  .full { grid-column: 1 / -1; }
+</style>
+</head>
+<body>
+<h1>RupeeCoin JS SDK Demo</h1>
+<p class="subtitle">Phase 9.3 — browser demo: chain status · UTXO lookup · transparent tx submission</p>
+
+<div id="rpc-url-row">
+  <div style="flex:1">
+    <label for="rpc-url">Node RPC URL</label>
+    <input id="rpc-url" value="http://127.0.0.1:9944">
+  </div>
+  <button id="btn-status">Refresh Status</button>
+</div>
+
+<div class="grid">
+
+  <!-- Chain Status -->
+  <div class="card" id="card-status">
+    <h2>Chain Status</h2>
+    <div id="status-body"><span style="color:var(--muted)">Click "Refresh Status"</span></div>
+  </div>
+
+  <!-- UTXO Lookup -->
+  <div class="card">
+    <h2>UTXO Lookup</h2>
+    <label for="addr-input">Address (Base58Check or 40-char hex)</label>
+    <input id="addr-input" placeholder="e.g. RPC1abc...">
+    <button id="btn-utxos">Fetch UTXOs</button>
+    <div id="utxo-status" class="status"></div>
+    <div id="utxo-body" style="margin-top:10px"></div>
+  </div>
+
+  <!-- Submit Signed Tx -->
+  <div class="card full">
+    <h2>Submit Signed Transaction</h2>
+    <p style="color:var(--muted);font-size:12px;margin-bottom:10px">
+      Sign a transaction with the Rust wallet CLI, then paste the output hex here to broadcast it.
+      <br>Example: <code>rupeecoin-wallet sign-tx --to &lt;addr&gt; --amount 1.5</code>
+    </p>
+    <label for="tx-hex">Signed tx hex (bincode-encoded Transaction)</label>
+    <textarea id="tx-hex" placeholder="paste hex here..."></textarea>
+
+    <div style="display:flex;gap:8px">
+      <button id="btn-decode">Decode &amp; Preview</button>
+      <button id="btn-submit" class="danger" disabled>Submit to Node</button>
+    </div>
+    <div id="tx-decode-out" style="margin-top:10px"></div>
+    <div id="tx-submit-status" class="status"></div>
+  </div>
+
+</div>
+
+<script type="module">
+// ── Minimal inline SDK (no build step required for demo) ──────────────────────
+
+/** Hex string → Uint8Array */
+function hexToBytes(hex) {
+  const out = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < out.length; i++) out[i] = parseInt(hex.slice(i*2, i*2+2), 16);
+  return out;
+}
+
+/** Decode bincode-serialized Transaction from hex. */
+function decodeTxHex(hex) {
+  const bytes = hexToBytes(hex);
+  let off = 0;
+
+  function readU8()  { return bytes[off++]; }
+  function readU32() { const v = new DataView(bytes.buffer).getUint32(off, true); off+=4; return v; }
+  function readU64() { const v = new DataView(bytes.buffer).getBigUint64(off, true); off+=8; return v; }
+  function readBytes(n) { const s=off; off+=n; return bytes.slice(s,off); }
+  function readByteVec() { const len=Number(readU64()); return readBytes(len); }
+  function hexOf(arr) { return Array.from(arr).map(b=>b.toString(16).padStart(2,'0')).join(''); }
+
+  function readOutPoint() {
+    return { txid: hexOf(readBytes(32)), vout: readU32() };
+  }
+  function readInput() {
+    return {
+      outpoint: readOutPoint(),
+      public_key: hexOf(readByteVec()),
+      signature: hexOf(readByteVec()),
+    };
+  }
+  function readOutput() {
+    return { amount: readU64(), recipient: hexOf(readBytes(20)) };
+  }
+
+  const version   = readU32();
+  const chain_id  = readU32();
+  const nonce     = readU64();
+  const expiry    = readU64();
+
+  const inputs_len = Number(readU64());
+  const inputs = [];
+  for (let i=0;i<inputs_len;i++) inputs.push(readInput());
+
+  const outputs_len = Number(readU64());
+  const outputs = [];
+  for (let i=0;i<outputs_len;i++) outputs.push(readOutput());
+
+  const has_coinbase = readU8();
+  const coinbase_data = has_coinbase ? hexOf(readByteVec()) : null;
+
+  return { version, chain_id, nonce, expiry, inputs, outputs, coinbase_data };
+}
+
+// ── RPC helpers ───────────────────────────────────────────────────────────────
+
+function rpcUrl() { return document.getElementById('rpc-url').value.replace(/\/$/,''); }
+
+async function fetchStatus() {
+  const res = await fetch(`${rpcUrl()}/rpc/status`);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
+async function fetchUtxos(addr) {
+  const res = await fetch(`${rpcUrl()}/rpc/utxos?addr=${encodeURIComponent(addr)}`);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
+async function submitTxHex(hex) {
+  const res = await fetch(`${rpcUrl()}/rpc/tx`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/plain' },
+    body: hex,
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status} — ${await res.text()}`);
+  return res.json();
+}
+
+// ── DOM helpers ───────────────────────────────────────────────────────────────
+
+function kv(k, v) {
+  return `<div class="kv"><span class="k">${k}</span><span class="v">${v}</span></div>`;
+}
+
+function setStatus(id, cls, msg) {
+  const el = document.getElementById(id);
+  el.className = `status ${cls}`;
+  el.textContent = msg;
+}
+
+// ── Chain Status ──────────────────────────────────────────────────────────────
+
+document.getElementById('btn-status').addEventListener('click', async () => {
+  try {
+    const s = await fetchStatus();
+    document.getElementById('status-body').innerHTML = `
+      ${kv('Height',            s.height)}
+      ${kv('Slot',              s.slot)}
+      ${kv('Epoch',             s.epoch)}
+      ${kv('Justified epoch',   s.last_justified_epoch)}
+      ${kv('Finalized epoch',   s.last_finalized_epoch)}
+      ${kv('Active validators', s.active_validators)}
+      ${kv('Total stake',       (BigInt(s.total_stake) / 100_000_000n) + ' RPC')}
+      ${kv('Mempool size',      s.mempool_size)}
+      ${kv('Base fee',          s.base_fee + ' μRPC')}
+    `;
+  } catch(e) {
+    document.getElementById('status-body').innerHTML =
+      `<span style="color:var(--red)">${e.message}</span>`;
+  }
+});
+
+// ── UTXO Lookup ───────────────────────────────────────────────────────────────
+
+document.getElementById('btn-utxos').addEventListener('click', async () => {
+  const addr = document.getElementById('addr-input').value.trim();
+  if (!addr) return setStatus('utxo-status','err','Enter an address');
+  try {
+    setStatus('utxo-status','inf','Fetching…');
+    const utxos = await fetchUtxos(addr);
+    if (!utxos.length) {
+      setStatus('utxo-status','inf','No UTXOs found for this address');
+      document.getElementById('utxo-body').innerHTML = '';
+      return;
+    }
+    setStatus('utxo-status','ok', `${utxos.length} UTXO(s) found`);
+    let html = '';
+    let total = 0n;
+    for (const u of utxos) {
+      total += BigInt(u.amount_micro);
+      html += `<div style="margin-bottom:8px;padding:8px;background:var(--bg);border:1px solid var(--border);border-radius:4px;font-size:12px">
+        <div style="color:var(--muted)">${u.txid.slice(0,16)}…:${u.vout}</div>
+        <div style="color:var(--green)">${u.amount_rpc} RPC</div>
+      </div>`;
+    }
+    html += `<div class="kv"><span class="k">Total</span><span class="v" style="color:var(--green)">${Number(total)/1e8} RPC</span></div>`;
+    document.getElementById('utxo-body').innerHTML = html;
+  } catch(e) {
+    setStatus('utxo-status','err', e.message);
+  }
+});
+
+// ── Submit Signed Tx ──────────────────────────────────────────────────────────
+
+document.getElementById('btn-decode').addEventListener('click', () => {
+  const hex = document.getElementById('tx-hex').value.trim().toLowerCase();
+  if (!hex) return;
+  try {
+    const tx = decodeTxHex(hex);
+    const inSum  = '?'; // inputs don't carry amounts (UTXO-model)
+    const outSum = tx.outputs.reduce((a,o)=>a+o.amount, 0n);
+    let html = `<pre>${JSON.stringify({
+      version:  tx.version,
+      chain_id: tx.chain_id,
+      nonce:    tx.nonce.toString(),
+      expiry:   tx.expiry.toString(),
+      inputs:   tx.inputs.length,
+      outputs:  tx.outputs.map(o => ({
+        amount_rpc: (Number(o.amount)/1e8).toFixed(8),
+        recipient:  o.recipient,
+      })),
+      coinbase: tx.coinbase_data ? tx.coinbase_data.slice(0,32)+'…' : null,
+      total_out_rpc: (Number(outSum)/1e8).toFixed(8),
+    }, null, 2)}</pre>`;
+    document.getElementById('tx-decode-out').innerHTML = html;
+    document.getElementById('btn-submit').disabled = false;
+    document.getElementById('tx-submit-status').className = 'status';
+  } catch(e) {
+    document.getElementById('tx-decode-out').innerHTML = `<span style="color:var(--red)">Decode error: ${e.message}</span>`;
+    document.getElementById('btn-submit').disabled = true;
+  }
+});
+
+document.getElementById('btn-submit').addEventListener('click', async () => {
+  const hex = document.getElementById('tx-hex').value.trim().toLowerCase();
+  try {
+    setStatus('tx-submit-status','inf','Submitting…');
+    document.getElementById('btn-submit').disabled = true;
+    const r = await submitTxHex(hex);
+    setStatus('tx-submit-status','ok', `Node: ${r.status}`);
+  } catch(e) {
+    setStatus('tx-submit-status','err', e.message);
+    document.getElementById('btn-submit').disabled = false;
+  }
+});
+</script>
+</body>
+</html>

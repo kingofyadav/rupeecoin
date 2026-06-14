@@ -1,0 +1,64 @@
+[workspace]
+resolver = "2"
+members = [
+    "core/crypto",
+    "core/types",
+    "core/utxo",
+    "core/blockchain",
+    "core/storage",
+    "core/mempool",
+    "core/network",
+    "core/staking",
+    "core/consensus",
+    "core/privacy",
+    "core/zkproof",
+    "core/economics",
+    "node",
+    "wallet",
+    "explorer",
+    "dashboard",
+    "faucet",
+    "rupeecoin-sdk",
+    "rupeecoin-tests",
+]
+
+[workspace.dependencies]
+blake3              = "1"
+pqcrypto-dilithium  = "0.5"
+pqcrypto-traits     = "0.3"
+serde               = { version = "1", features = ["derive"] }
+bincode             = "1"
+thiserror           = "1"
+anyhow              = "1"
+hex                 = "0.4"
+# Phase 2
+rocksdb             = { version = "0.22", default-features = false }
+tokio               = { version = "1", features = ["full"] }
+futures             = "0.3"
+libp2p              = { version = "0.54", features = [
+    "tcp", "noise", "yamux", "gossipsub",
+    "identify", "mdns", "ping", "request-response", "tokio", "macros",
+] }
+tracing             = "0.1"
+tracing-subscriber  = { version = "0.3", features = ["env-filter"] }
+# Phase 4: privacy / zk
+pqcrypto-kyber      = "0.8"
+chacha20poly1305    = "0.10"
+rand                = { version = "0.8", features = ["small_rng"] }
+# Phase 5: wallet + RPC
+axum                = { version = "0.7", features = ["json"] }
+serde_json          = "1"
+ureq                = { version = "2", features = ["json"] }
+clap                = { version = "4", features = ["derive"] }
+zeroize             = "1"
+# Phase 5B: zk-STARK spend proofs
+winterfell          = "0.13"
+# Phase 7: transaction hardening
+bs58                = "0.5"
+argon2              = "0.5"
+rpassword           = "7"
+# Phase 9: testing
+proptest            = "1"
+# Phase 9.2: validator dashboard TUI
+ratatui             = "0.29"
+crossterm           = "0.28"

@@ -1,0 +1,1217 @@
+================================================================================
+  RUPEECOIN — DEVELOPER & USER GUIDE
+  Complete reference for CLI tools, RPC API, SDK, and protocol constants
+  Build: Phases 0–10.2 complete  |  Test suite: 86 tests + 4 bench groups, 0 failures
+================================================================================
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  PART 1 — BUILD & INSTALL
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Prerequisites
+  - Rust 1.75+ (stable)          https://rustup.rs
+  - LLVM / clang (for RocksDB)
+    Ubuntu/Debian:  sudo apt install clang libclang-dev
+    Arch:           sudo pacman -S clang
+
+Build everything
+  cargo build --release
+
+Binaries produced
+  target/release/rupeecoin-node     — full node + block producer + RPC server
+  target/release/rupeecoin-wallet   — CLI wallet (HD keys + shielded pool)
+
+Run all tests
+  cargo test --workspace
+
+  Expected output (all should be "ok"):
+    rupeecoin-crypto      11 tests   (HD derivation, hash, address)
+    rupeecoin-economics   16 tests   (supply schedule, fee market — incl. proptest)
+    rupeecoin-mempool      6 tests   (ordering, eviction — incl. proptest)
+    rupeecoin-network     11 tests   (Dandelion++ routing, peer selection)
+    rupeecoin-privacy      7 tests   (notes, nullifiers, Merkle, shielded tx)
+    rupeecoin-sdk         11 tests   (wallet, tx helpers, RPC client)
+    rupeecoin-tests       17 tests   (cross-crate integration)
+    ─────────────────────────────────
+    Total                 81 tests   0 failures
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  PART 2 — NODE CLI  (rupeecoin-node)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Synopsis
+  rupeecoin-node [FLAGS]
+
+All flags are optional.  Defaults are shown in brackets.
+
+  --data-dir <path>
+        Directory for RocksDB chain data, keystore, checkpoints.
+        Default: ./rupeecoin-data
+
+  --listen <multiaddr>
+        libp2p TCP listen address.
+        Default: /ip4/0.0.0.0/tcp/30333
+        Example: --listen /ip4/0.0.0.0/tcp/30333
+
+  --peer <multiaddr>
+        Dial a specific peer on startup.  Repeatable — pass multiple times
+        to connect to several bootstrap nodes.
+        Example: --peer /ip4/1.2.3.4/tcp/30333/p2p/12D3KooW...
+
+  --stake <RPC>
+        Whole RPC to stake.  Node registers as a validator and participates
+        in block production once the stake is active.
+        Minimum: 10000 RPC
+        Example: --stake 10000
+
+  --rpc-port <port>
+        HTTP JSON-RPC server port.
+        Default: 9944
+        Example: --rpc-port 8080
+
+  --no-rpc
+        Disable the HTTP RPC server entirely (archive/relay nodes).
+
+  --block-interval <secs>
+        Slot duration in seconds.  Override only on private testnets.
+        Default: 4
+
+  --validator-seed <64-char-hex>
+        Deterministic 32-byte seed for the node's Dilithium3 validator keypair.
+        Same seed always produces the same keypair → same validator address.
+        Use on testnets so coinbase rewards accumulate to a known address that
+        external tools (fund_faucet example, wallet CLI) can spend from.
+        On mainnet omit this flag (random ephemeral key is generated).
+        Example: --validator-seed cccc...cc   (64 hex chars = 32 bytes)
+
+  --checkpoint <height:block_hash_hex:state_root_hex>
+        Supply a trusted weak-subjectivity checkpoint.  Validation is skipped
+        for all blocks at or below this height, enabling fast sync.
+        Both hashes must be 64-character hex strings (32 bytes each).
+        Example: --checkpoint 604800:<64-char-hash>:<64-char-state-root>
+        Checkpoints are auto-saved every 604800 blocks (~28 days at 4 s/slot).
+
+  --help / -h
+        Print this flag reference and exit.
+
+── Common Usage Patterns ─────────────────────────────────────────────────────
+
+Run a full node (no validation, no RPC):
+  rupeecoin-node --no-rpc
+
+Run a full node with RPC open to localhost:
+  rupeecoin-node
+
+Run a validator node staking 10000 RPC:
+  rupeecoin-node --stake 10000
+
+Run a validator node that dials two known peers:
+  rupeecoin-node --stake 10000 \
+    --peer /ip4/1.2.3.4/tcp/30333/p2p/12D3KooWABC... \
+    --peer /ip4/5.6.7.8/tcp/30333/p2p/12D3KooWXYZ...
+
+Fast-sync with a community checkpoint (skip 28 days of validation):
+  rupeecoin-node \
+    --checkpoint 604800:<block_hash_hex>:<state_root_hex> \
+    --stake 10000
+
+Store chain data in a specific directory:
+  rupeecoin-node --data-dir /mnt/nvme/rupeecoin --stake 10000
+
+Expose RPC on a non-default port:
+  rupeecoin-node --rpc-port 8080
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  PART 3 — WALLET CLI  (rupeecoin-wallet)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Global flag (applies to every subcommand):
+  --keys <path>    Keystore file path.  Default: wallet.json
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  SUBCOMMAND: generate
+  ─────────────────────
+  Generate a brand-new wallet.  Creates the keystore file.
+  Fails if the file already exists (delete it to start over).
+
+  Usage:
+    rupeecoin-wallet generate
+    rupeecoin-wallet --keys /secure/path/mywallet.json generate
+
+  Output:
+    Wallet created: wallet.json
+    Privacy payment address: <64-char hex>
+    Transparent address #0:  <Base58Check string>
+    Payment URI: rupeecoin:<Base58Check string>
+
+  What is created:
+    - 32-byte random HD master seed (BLAKE3-based key tree)
+    - Kyber768 + Dilithium privacy key bundle
+    - Keystore encrypted with Argon2id + XChaCha20-Poly1305
+    - Transparent address derived at path m/HD_RECEIVE/0
+
+  BACKUP: Write down or securely store the master seed.
+          Losing it means losing all funds.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  SUBCOMMAND: address
+  ────────────────────
+  Print your current transparent and shielded addresses.
+  Does NOT advance the HD index.
+
+  Usage:
+    rupeecoin-wallet address
+
+  Output:
+    Privacy payment address: <hex>
+    Transparent address #N:  <Base58Check>
+    Payment URI:             rupeecoin:<Base58Check>?vk=<view_key_hex>
+
+  Use the transparent address to receive normal (visible) transactions.
+  Use the privacy payment address to receive shielded (private) transactions.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  SUBCOMMAND: receive
+  ────────────────────
+  Advance the HD receive index by 1 and print the new address.
+  Each call produces a fresh address to improve privacy
+  (avoid address reuse).
+
+  Usage:
+    rupeecoin-wallet receive
+
+  Output:
+    New transparent address #N: <Base58Check>
+    Payment URI: rupeecoin:<Base58Check>
+
+  Best practice: call `receive` for each new payment instead of
+  reusing the address shown by `address`.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  SUBCOMMAND: scan
+  ─────────────────
+  Scan the blockchain (via a running node's RPC) for shielded notes
+  that belong to this wallet.  Downloads all encrypted notes and
+  tries to decrypt each with your view key.
+
+  Usage:
+    rupeecoin-wallet scan
+    rupeecoin-wallet scan --rpc http://127.0.0.1:9944
+
+  Options:
+    --rpc <url>   Node RPC base URL.  Default: http://127.0.0.1:9944
+
+  Output:
+    Found N note(s) belonging to this wallet.
+    Note #0: value=1.5 RPC  commitment=<hex>  nullifier=<hex>
+
+  Notes: scanning is a read-only operation.  It does not submit any transaction.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  SUBCOMMAND: send
+  ─────────────────
+  Build and broadcast a shielded transaction.
+
+  Usage:
+    rupeecoin-wallet send \
+      --to <address_or_uri> \
+      --amount <RPC> \
+      [--fee <RPC>] \
+      [--rpc <url>]
+
+  Options:
+    --to <address>   Recipient hex payment address OR rupeecoin: URI
+    --amount <f64>   Amount in whole RPC (e.g. 1.5 for 1.5 RPC)
+    --fee <f64>      Transaction fee in RPC.  Default: 0.001
+    --rpc <url>      Node RPC URL.  Default: http://127.0.0.1:9944
+
+  Examples:
+    # Send 10 RPC to an address
+    rupeecoin-wallet send --to <hex_payment_address> --amount 10
+
+    # Send using a payment URI
+    rupeecoin-wallet send --to "rupeecoin:<Base58Check>" --amount 5.5
+
+    # Send with a custom fee
+    rupeecoin-wallet send --to <address> --amount 100 --fee 0.01
+
+  The wallet selects unspent notes from `scan`, constructs a shielded
+  transaction, and submits it to the node via POST /rpc/privacy_tx.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  PAYMENT URI FORMAT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Minimal:
+    rupeecoin:<Base58Check-address>
+
+  Full (with optional query parameters):
+    rupeecoin:<Base58Check-address>?amount=10.5&vk=<view_key_hex>&label=Coffee
+
+  Parameters:
+    amount=<f64>     Pre-fill the amount field (whole RPC)
+    vk=<hex>         View key (64-char hex) — for wallet scanning
+    label=<string>   Human-readable label (URL-encoded)
+
+  Example:
+    rupeecoin:3J98t1WpEZ73CNmQviecrnyiWrnqRhWNLy?amount=5&label=Donation
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  PART 4 — HTTP JSON-RPC API
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Base URL: http://127.0.0.1:9944   (or whatever --rpc-port you used)
+  All GET endpoints return JSON.  POST body is hex-encoded binary.
+
+──────────────────────────────────────────────────────────────────────────────
+  GET /rpc/height
+──────────────────────────────────────────────────────────────────────────────
+  Returns the current chain tip height.
+
+  Response:
+    { "height": 12345 }
+
+  curl example:
+    curl http://127.0.0.1:9944/rpc/height
+
+──────────────────────────────────────────────────────────────────────────────
+  GET /rpc/recent_roots
+──────────────────────────────────────────────────────────────────────────────
+  Returns recent Merkle roots of the shielded commitment tree, used
+  as anchors when constructing shielded spends.
+  At most ANCHOR_DEPTH+1 roots are kept (default 101 roots).
+
+  Response:
+    {
+      "roots": ["<hex>", "<hex>", ...],
+      "commitment_count": 42
+    }
+
+  Fields:
+    roots             Array of hex-encoded 32-byte Merkle roots, newest first.
+    commitment_count  Total number of note commitments in the tree.
+
+  curl example:
+    curl http://127.0.0.1:9944/rpc/recent_roots
+
+──────────────────────────────────────────────────────────────────────────────
+  GET /rpc/shielded_outputs?start=<n>&count=<n>
+──────────────────────────────────────────────────────────────────────────────
+  Paginate all shielded outputs (encrypted notes) in chain order.
+  Used by wallets during scanning.
+
+  Query parameters:
+    start   First index to return.  Default: 0
+    count   Number of outputs to return.  Default: 100
+
+  Response (array):
+    [
+      {
+        "index": 0,
+        "commitment_hex": "<64-char hex>",
+        "encrypted_note_bytes": "<hex-encoded bincode(EncryptedNote)>"
+      },
+      ...
+    ]
+
+  curl example:
+    curl "http://127.0.0.1:9944/rpc/shielded_outputs?start=0&count=50"
+
+──────────────────────────────────────────────────────────────────────────────
+  GET /rpc/merkle_path?index=<n>
+──────────────────────────────────────────────────────────────────────────────
+  Returns the Merkle authentication path for a specific note commitment
+  by its index in the commitment tree.  Required to build a spend proof.
+
+  Query parameters:
+    index   Commitment tree index (0-based).
+
+  Response:
+    {
+      "path": [
+        ["<sibling_hash_hex>", true_or_false],
+        ...
+      ],
+      "anchor": "<root_hash_hex>"
+    }
+
+  Fields:
+    path    Array of [sibling_hex, is_right_child] pairs, leaf to root.
+    anchor  The Merkle root at the time the path was computed.
+
+  Error (400): { "error": "index 99 out of range" }
+
+  curl example:
+    curl "http://127.0.0.1:9944/rpc/merkle_path?index=0"
+
+──────────────────────────────────────────────────────────────────────────────
+  GET /rpc/nullifier_status?hex=<64-char-hex>
+──────────────────────────────────────────────────────────────────────────────
+  Check whether a nullifier has already been spent (double-spend check).
+
+  Query parameters:
+    hex   Nullifier as a 64-character hex string (32 bytes).
+
+  Response:
+    { "spent": false }
+
+  Fields:
+    spent   true  → nullifier is already in the spent set (double-spend)
+            false → nullifier has not been spent
+
+  Error (400): { "error": "hex decode: ..." }
+               { "error": "nullifier must be 32 bytes" }
+
+  curl example:
+    curl "http://127.0.0.1:9944/rpc/nullifier_status?hex=<64-char-hex>"
+
+──────────────────────────────────────────────────────────────────────────────
+  POST /rpc/privacy_tx
+──────────────────────────────────────────────────────────────────────────────
+  Submit a shielded (privacy) transaction.
+
+  Request body (raw text):
+    Hex-encoded bincode serialisation of a PrivacyTransaction.
+    Content-Type is not required; raw bytes are accepted.
+
+  Response (200):
+    { "status": "accepted" }
+
+  Error (400):
+    { "error": "<reason>" }
+    Possible reasons:
+      - "hex decode: ..."
+      - "bincode decode: ..."
+      - stateless validation failure (balance, proof, etc.)
+      - stateful validation failure (unknown anchor, spent nullifier)
+
+  curl example:
+    curl -X POST http://127.0.0.1:9944/rpc/privacy_tx \
+         --data-binary "<hex-encoded-privacy-tx>"
+
+──────────────────────────────────────────────────────────────────────────────
+  GET /rpc/status
+──────────────────────────────────────────────────────────────────────────────
+  Full node snapshot: height, tip hash, validator count, mempool size,
+  base fee, and the node's own transparent validator address.
+
+  Response:
+    {
+      "height": 42,
+      "tip_hash": "<64-char hex>",
+      "validator_count": 3,
+      "mempool_size": 7,
+      "base_fee": 1000,
+      "my_address": "aNV16Nqm..."
+    }
+
+  curl example:
+    curl http://127.0.0.1:9944/rpc/status
+
+──────────────────────────────────────────────────────────────────────────────
+  GET /rpc/utxos?addr=<40-char-hex>
+──────────────────────────────────────────────────────────────────────────────
+  All unspent transparent UTXOs for an address.
+  The address must be a 40-character hex string (20 raw bytes).
+
+  Response (array):
+    [
+      { "txid": "<64-char hex>", "vout": 0, "amount_micro": 5000000000 },
+      ...
+    ]
+
+  Error (400): { "error": "addr must be 40 hex chars" }
+
+  curl example:
+    curl "http://127.0.0.1:9944/rpc/utxos?addr=<40-char-hex>"
+
+──────────────────────────────────────────────────────────────────────────────
+  POST /rpc/tx
+──────────────────────────────────────────────────────────────────────────────
+  Submit a signed transparent transaction.
+
+  Request body (raw text):
+    Hex-encoded bincode serialisation of a Transaction.
+    Content-Type is not required.
+
+  Response (200):
+    { "status": "accepted" }
+
+  Error (400):
+    { "error": "<reason>" }
+    Possible reasons:
+      - "hex decode: ..."
+      - "bincode decode: ..."
+      - UTXO not found / already spent
+      - invalid signature
+      - wrong chain_id or nonce
+      - expired (expiry block < current height)
+
+  curl example:
+    curl -X POST http://127.0.0.1:9944/rpc/tx \
+         --data-binary "<hex-encoded-tx>"
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  PART 5 — RUST SDK  (rupeecoin-sdk)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Add to Cargo.toml:
+    rupeecoin-sdk = { path = "../rupeecoin-sdk" }     # local path
+    # or (once published):
+    # rupeecoin-sdk = "0.1"
+
+  The SDK exposes three modules: keys, rpc, tx.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  rupeecoin_sdk::keys::Wallet
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  use rupeecoin_sdk::Wallet;
+
+  // Create a new wallet with random entropy
+  let mut wallet = Wallet::generate();
+
+  // Restore from a backed-up seed
+  let seed: [u8; 32] = /* your stored seed */;
+  let mut wallet = Wallet::from_seed(seed);
+
+  // Get the master seed for secure backup
+  let seed: &[u8; 32] = wallet.master_seed();
+
+  // Current transparent receive address (does NOT advance index)
+  let addr: Address = wallet.receive_address();
+  let addr_str: String = wallet.receive_address_string(); // Base58Check
+
+  // Advance index, get a new address (for next payment)
+  let new_addr: Address = wallet.advance_receive_index();
+
+  // Derive address at a specific index
+  let addr_5: Address = wallet.address_at(5);
+
+  // Get signing key for the current receive address
+  let kp: KeyPair = wallet.receive_keypair();
+
+  // Get the validator signing key (path m/HD_VALIDATOR/0)
+  let val_kp: KeyPair = wallet.validator_keypair();
+
+  // Access the shielded payment key bundle
+  let privacy: &PrivacyKeyBundle = &wallet.privacy;
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  rupeecoin_sdk::rpc::RpcClient
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  All methods are synchronous (blocking).  Requires a running node.
+
+  use rupeecoin_sdk::RpcClient;
+
+  let client = RpcClient::new("http://127.0.0.1:9944");
+
+  // Get current block height
+  let height: u64 = client.height()?;
+
+  // Get recent Merkle roots (for building spend proofs)
+  let roots_resp = client.recent_roots()?;
+  let roots: Vec<Hash> = roots_resp.roots;
+  let count: u64 = roots_resp.commitment_count;
+
+  // Paginate shielded outputs for wallet scanning
+  let outputs = client.shielded_outputs(0, 100)?;
+  for entry in outputs {
+      let index: u64 = entry.index;
+      let commitment: Vec<u8> = entry.commitment_hex; // hex string
+      let enc_note: Vec<u8> = entry.encrypted_note_bytes; // hex string
+  }
+
+  // Get Merkle auth path for a note commitment at a given index
+  let path_resp = client.merkle_path(0)?;
+  let path = path_resp.path;      // Vec<(String, bool)>
+  let anchor = path_resp.anchor;  // hex root
+
+  // Check if a nullifier is spent
+  let spent: bool = client.nullifier_status(&nullifier_hash)?;
+
+  // Submit a shielded transaction
+  client.submit_privacy_tx(&privacy_tx)?;
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  rupeecoin_sdk::tx — Transaction helpers
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  use rupeecoin_sdk::tx::{build_transfer, coins_to_micro, micro_to_coins_str};
+  use rupeecoin_types::{MAINNET_CHAIN_ID, OutPoint, TxOutput};
+
+  // Build and sign a transparent transfer transaction
+  let tx = build_transfer(
+      &keypair,           // signing key
+      vec![outpoint],     // UTXO inputs to spend
+      vec![output],       // outputs (address + amount in micro-RPC)
+      MAINNET_CHAIN_ID,   // 1 = mainnet, 2 = testnet
+      nonce,              // sender's current nonce (from UTXO set)
+      expiry,             // last valid block height (0 = no expiry)
+  );
+
+  // Unit conversion
+  let micro: u64 = coins_to_micro(1.5);        // 150_000_000
+  let display: String = micro_to_coins_str(micro); // "1.5 RPC"
+
+  // 1 RPC = 100_000_000 micro-RPC
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  PART 6 — PROTOCOL CONSTANTS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  ── Coin denomination ──────────────────────────────────────────────────────
+  MICRO_RPC_PER_COIN    100_000_000   1 RPC = 100,000,000 micro-RPC
+  MAINNET_CHAIN_ID      1
+  TESTNET_CHAIN_ID      2
+
+  ── Consensus timing ───────────────────────────────────────────────────────
+  SLOT_DURATION_SECS    4             seconds per slot (block time)
+  SLOTS_PER_EPOCH       32            slots per epoch = 128 seconds
+  CHECKPOINT_INTERVAL   604_800       blocks between auto-checkpoints
+                                      ≈ 28 days at 4 s/block
+
+  ── Staking ────────────────────────────────────────────────────────────────
+  MIN_STAKE_MICRO_RPC   1_000_000_000_000   = 10,000 RPC minimum stake
+
+  ── Economics / supply schedule ────────────────────────────────────────────
+  INITIAL_BLOCK_REWARD  5_000_000_000       = 50 RPC per block (Era 0)
+  HALVING_1             31_536_000          ≈ Year 4   → 25 RPC
+  HALVING_2             63_072_000          ≈ Year 8   → 12.5 RPC
+  HALVING_3             94_608_000          ≈ Year 12  → 6.25 RPC
+  HALVING_4             126_144_000         ≈ Year 16  → tail emission
+  TAIL_EMISSION         100_000_000         = 1 RPC/block (permanent)
+
+  ── EIP-1559 Fee market ────────────────────────────────────────────────────
+  GAS_TARGET            500     target tx/block (50% of limit)
+  GAS_LIMIT             1_000   maximum tx/block
+  INITIAL_BASE_FEE      1_000   micro-RPC/tx at genesis
+  MIN_BASE_FEE          100     floor — base fee never drops below this
+  Max change per block  ±12.5%  (×(excess / target / 8))
+
+  ── Block storage ──────────────────────────────────────────────────────────
+  BLOCK_KEEP_LAST       512     recent blocks kept in RAM
+  ANCHOR_DEPTH          100     shielded Merkle roots kept for spends
+
+  ── Dandelion++ network privacy ────────────────────────────────────────────
+  STEM_MIN_HOPS         2       minimum stem hops before fluff
+  STEM_MAX_HOPS         10      maximum stem hops (uniform random pick)
+  STEM_TIMEOUT          10s     fallback: if not seen via gossipsub, fluff
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  PART 7 — CRATE MAP (workspace layout)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  core/crypto        Hash, KeyPair, Signature, VrfProof, HdNode, Address
+                     Dilithium3 post-quantum signatures
+                     BLAKE3 hashing and HD key derivation
+
+  core/types         Transaction, Block, BlockHeader, OutPoint, TxInput,
+                     TxOutput, Attestation — shared wire types
+
+  core/utxo          UtxoSet — UTXO validation, UTXO state root
+
+  core/mempool       Mempool — fee-ordered transaction pool, EIP-1559 eviction
+
+  core/staking       ValidatorRegistry — stake, slashing, inactivity tracking
+
+  core/consensus     VRF proposer selection, Casper FFG attestation,
+                     CheckpointManager, epoch transitions
+
+  core/economics     block_reward (halving schedule), next_base_fee (EIP-1559),
+                     PmfpAccumulator, inactivity leak, reward distribution
+
+  core/privacy       CommitmentTree, Note, Nullifier, EncryptedNote,
+                     ShieldedTxBuilder, SpendProof (Kyber768 + Dilithium3)
+
+  core/zkproof       Winterfell STARK prover/verifier for spend proofs
+
+  core/blockchain    Chain, build_block, build_coinbase, genesis_block
+                     Full block validation + state transition
+
+  core/storage       ChainStore (RocksDB) — block persistence, nullifiers,
+                     shielded outputs, checkpoints
+
+  core/network       libp2p swarm — gossipsub, request-response sync,
+                     Dandelion++ (dandelion.rs), peer management
+
+  node               Binary: block producer + RPC server + p2p node
+                     Flags: --stake, --rpc-port, --validator-seed, --checkpoint, …
+
+  wallet             Binary: HD wallet + shielded transaction CLI
+                     Commands: generate, address, receive, scan, send, claim, sign-tx
+
+  explorer           Binary: block explorer (axum REST + dark-mode SPA)
+                     Routes: /api/height, /api/recent, /api/block/:h, /api/tx/:id, …
+
+  dashboard          Binary: validator dashboard (ratatui TUI)
+                     Polls /rpc/status and /rpc/validator_info; auto-refreshes
+
+  faucet             Binary: testnet faucet (axum web service + dark-mode SPA)
+                     POST /drip, GET /api/stats; keyfile for seed+nonce persistence
+                     fund_faucet example: one-shot transfer from --validator-seed node
+
+  sdk-js             TypeScript SDK: types, bincode codec, RpcClient, tx builder, signer
+                     demo.html: browser demo — sign-and-submit transparent tx
+
+  sdk-py             Python SDK: PyO3 + maturin wheel
+                     Classes: Wallet, RpcClient, OutPoint, TxOutput, Transaction
+
+  rupeecoin-sdk      Rust SDK: Wallet (HD), RpcClient, build_transfer, denomination helpers
+
+  rupeecoin-tests    Integration test crate: 17 cross-crate tests
+                     Criterion benchmarks: block_throughput, state_root, privacy_proof, chain_sync
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  PART 8 — QUICK START: RUNNING A LOCAL TESTNET
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Step 1: Build release binaries
+    cargo build --release
+
+  Step 2: Start Node A (block producer)
+    ./target/release/rupeecoin-node \
+      --data-dir /tmp/nodeA \
+      --listen /ip4/127.0.0.1/tcp/30333 \
+      --rpc-port 9944 \
+      --stake 10000
+
+  Step 3: Get Node A's peer ID (printed in startup logs)
+    Look for: "Local peer id: 12D3KooW..."
+
+  Step 4: Start Node B (syncs from A)
+    ./target/release/rupeecoin-node \
+      --data-dir /tmp/nodeB \
+      --listen /ip4/127.0.0.1/tcp/30334 \
+      --rpc-port 9945 \
+      --peer /ip4/127.0.0.1/tcp/30333/p2p/<Node-A-peer-id>
+
+  Step 5: Create a wallet
+    ./target/release/rupeecoin-wallet --keys test.json generate
+
+  Step 6: Check current block height
+    curl http://127.0.0.1:9944/rpc/height
+
+  Step 7: Scan for received shielded notes
+    ./target/release/rupeecoin-wallet --keys test.json scan
+
+  Step 8: Send a shielded transaction
+    ./target/release/rupeecoin-wallet --keys test.json send \
+      --to <recipient_payment_address_hex> \
+      --amount 1.5
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  PART 9 — CRYPTOGRAPHIC PRIMITIVES REFERENCE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Signature scheme:   Dilithium3 (NIST PQC Level 3, post-quantum)
+  Hash function:      BLAKE3 (256-bit output)
+  VRF:                Dilithium VRF (chained per-block randomness)
+  HD derivation:      BLAKE3-based (path m/account/index)
+  Shielded key enc:   Kyber768 (post-quantum KEM) + XChaCha20-Poly1305
+  Keystore cipher:    Argon2id + XChaCha20-Poly1305 (v3 format)
+  Spend proofs:       Winterfell STARK
+  Address format:     Base58Check (transparent)
+                      Raw hex (privacy/shielded payment address)
+
+  HD path conventions:
+    m/0/index    — transparent receive addresses
+    m/1/0        — validator signing key
+    (constants HD_RECEIVE=0, HD_VALIDATOR=1 in core/crypto)
+
+  Address encoding/decoding:
+    use rupeecoin_crypto::{encode_address, decode_address};
+    let addr_str = encode_address(&address);   // → Base58Check string
+    let addr     = decode_address(&addr_str)?; // → Address or error
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  PART 10 — FREQUENTLY ASKED QUESTIONS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Q: How do I back up my wallet?
+     A: The master seed (32 bytes) is the only thing you need.
+        Call wallet.master_seed() in the SDK, or look inside
+        the keystore JSON for the encrypted form.
+        Never share the raw seed — anyone with it can spend your funds.
+
+  Q: What is the minimum stake to become a validator?
+     A: 10,000 RPC (= 1,000,000,000,000 micro-RPC).
+        Pass --stake 10000 to rupeecoin-node.
+
+  Q: How often are checkpoints created?
+     A: Automatically every 604,800 blocks (~28 days at 4 s/block).
+        Stored in the --data-dir/checkpoints column family in RocksDB.
+
+  Q: What is the block time?
+     A: 4 seconds per slot (SLOT_DURATION_SECS = 4).
+        One epoch = 32 slots = 128 seconds ≈ 2 minutes.
+
+  Q: How does transaction privacy work?
+     A: Shielded transactions use:
+        - Kyber768 for note encryption (post-quantum KEM)
+        - Dilithium3 for spend authorization
+        - BLAKE3 Merkle tree for commitment privacy
+        - Nullifiers to prevent double-spending without revealing identity
+        - Dandelion++ at the network layer to prevent IP-origin linking
+
+  Q: What is Dandelion++?
+     A: A two-phase transaction broadcast protocol.
+        Stem phase: forward to a single random peer for N hops (N ∈ [2, 10]).
+        Fluff phase: standard gossipsub broadcast to all peers.
+        This prevents observers from linking a transaction to its origin IP.
+
+  Q: What does chain_id do in transactions?
+     A: Prevents replay attacks across networks.
+        Use MAINNET_CHAIN_ID (1) for mainnet, TESTNET_CHAIN_ID (2) for testnet.
+        A transaction signed for testnet cannot be replayed on mainnet.
+
+  Q: What happens if a transaction expires?
+     A: Set expiry to the last valid block height (0 = never expires).
+        After the chain passes that height, the transaction is rejected.
+
+  Q: How do I decode a PrivacyTransaction from the RPC?
+     A: The POST /rpc/privacy_tx body is hex(bincode(PrivacyTransaction)).
+        In Rust:
+          let raw = hex::decode(hex_str)?;
+          let tx: PrivacyTransaction = bincode::deserialize(&raw)?;
+
+  Q: Why does the wallet show "0 notes found" after scanning?
+     A: Either no shielded funds have been sent to your payment address yet,
+        or the node is still syncing.  Check /rpc/height and compare with a
+        known block explorer or peer.
+
+  Q: How do I run tests for a single crate?
+     A: cargo test -p rupeecoin-crypto
+        cargo test -p rupeecoin-network
+        cargo test -p rupeecoin-tests    (integration tests)
+
+  Q: What are proptest tests?
+     A: Property-based tests that generate hundreds of random inputs and
+        verify invariants hold for all of them.  Used in:
+        - rupeecoin-economics: reward monotonicity, fee floor
+        - rupeecoin-mempool:   drain ordering, eviction correctness
+        - rupeecoin-crypto:    HD derivation determinism
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  PART 11 — DEVELOPMENT CHEATSHEET
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Build all crates:
+    cargo build --workspace
+
+  Build release binaries:
+    cargo build --release
+
+  Run all tests:
+    cargo test --workspace
+
+  Run a specific crate's tests:
+    cargo test -p <crate-name>
+
+  Run a single test by name:
+    cargo test -p rupeecoin-network dandelion
+
+  Run integration tests only:
+    cargo test -p rupeecoin-tests
+
+  Check for compilation errors without building:
+    cargo check --workspace
+
+  Lint with clippy:
+    cargo clippy --workspace
+
+  Format code:
+    cargo fmt --all
+
+  View dependency tree:
+    cargo tree -p rupeecoin-node
+
+  Add a dependency to a crate:
+    Edit the crate's Cargo.toml [dependencies] section.
+    Shared deps go in workspace Cargo.toml [workspace.dependencies].
+
+  Check test output verbosely:
+    cargo test --workspace -- --nocapture
+
+  Run proptest with more cases (default is 256):
+    PROPTEST_CASES=1000 cargo test --workspace
+
+  Run all Criterion benchmarks (release mode strongly recommended):
+    cargo bench -p rupeecoin-tests
+
+  Run a specific benchmark group:
+    cargo bench -p rupeecoin-tests --bench block_throughput
+    cargo bench -p rupeecoin-tests --bench state_root
+    cargo bench -p rupeecoin-tests --bench privacy_proof
+    cargo bench -p rupeecoin-tests --bench chain_sync
+
+  Baseline results (release build, AMD64):
+    build_block/single   ~830 µs   → ~1 200 blocks/s
+    add_blocks/200       ~249 ms   → ~803 blocks/s
+    chain_sync/50        ~11.5 ms  → 4 355 blocks/s
+    chain_sync/1000      ~2.28 s   → 439 blocks/s    (UTXO growth slows state_root)
+    state_root/100K      ~346 ms   → ~290K UTXOs/s   (O(N log N))
+    STARK verify         ~50 ms    (within ≤50 ms whitepaper target)
+    STARK prove          ~3–5 s    (Phase 11 optimization: ≤3 s mobile target)
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  PART 12 — TROUBLESHOOTING
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+──────────────────────────────────────────────────────────────────────────────
+  Error: serialization: io error: unexpected end of file
+──────────────────────────────────────────────────────────────────────────────
+  Cause:  The node was killed mid-write (Ctrl+C, kill, crash, power loss).
+          RocksDB has a partially written block record.  The node cannot
+          replay the chain and exits immediately.
+
+  Fix:    Wipe the data directory and start fresh.
+            rm -rf ~/dev/projects/rupeecoin/rupeecoin-data
+            rpc-start 10000
+
+  Note:   All on-chain state is lost.  On a real network, sync from a peer
+          instead of wiping:
+            rpc-start 10000 --peer /ip4/<peer-ip>/tcp/30333/p2p/<peer-id>
+          (peer sync not yet automatic — full sync is a Phase 10 item).
+
+──────────────────────────────────────────────────────────────────────────────
+  Node starts then immediately exits (Exit 1)
+──────────────────────────────────────────────────────────────────────────────
+  Cause:  Any startup failure (serialization, bad flags, port in use, etc.).
+
+  Fix:    Check the log immediately after the crash:
+            rpc-log
+          Common causes and fixes:
+
+    "unexpected end of file"       → wipe data dir (see above)
+    "Address already in use"       → another node is on port 30333 or 9944
+                                     kill it: rpc-stop  or  pkill rupeecoin-node
+    "stake X below minimum"        → minimum stake is 10,000 RPC
+                                     use: rpc-start 10000
+    "binary not found"             → run rpc-release first
+    RocksDB "column family" error  → data dir was from an older binary format;
+                                     wipe: rm -rf ~/dev/projects/rupeecoin/rupeecoin-data
+
+──────────────────────────────────────────────────────────────────────────────
+  rpc-start <n> — stake argument
+──────────────────────────────────────────────────────────────────────────────
+  The argument to rpc-start is whole RPC coins (not micro-RPC, not a port).
+
+    rpc-start           run as full node, no validator role
+    rpc-start 10000     stake 10,000 RPC → join validator set
+    rpc-start 50000     stake 50,000 RPC → higher weight proposer
+
+  Minimum: 10,000 RPC.  Values below this are rejected by the staking module.
+  Do NOT pass a port number (e.g. 8080) — that is not the stake amount.
+
+──────────────────────────────────────────────────────────────────────────────
+  WARN gossipsub publish … InsufficientPeers  (FIXED — no longer shown)
+──────────────────────────────────────────────────────────────────────────────
+  This was a log-level issue, not an error.  gossipsub requires at least one
+  mesh peer to publish a message.  On a solo node with no peers connected,
+  every broadcast attempt produced a WARN even though the node was working
+  correctly (blocks were still produced and stored locally).
+
+  Fix applied in core/network/src/lib.rs:
+    - InsufficientPeers → trace!()  (silent at default log level)
+    - All other publish errors → warn!()  (still surfaced)
+
+  If you still see it on an older binary, rebuild:  rpc-release
+
+  To connect peers and eliminate the condition entirely:
+    rpc-start 10000 --peer /ip4/<ip>/tcp/30333/p2p/<peer-id>
+
+  To see the trace messages (debugging network activity):
+    RUST_LOG=rupeecoin_network=trace rpc-start 10000
+
+──────────────────────────────────────────────────────────────────────────────
+  rpc-height / rpc-roots return "(node not responding)"
+──────────────────────────────────────────────────────────────────────────────
+  Cause:  The node is not running, or the RPC port differs from RPC_NODE_URL.
+
+  Fix:
+    rpc-ps                    # confirm node is running
+    rpc-start 10000           # start it if not
+
+  If using a non-default port:
+    RPC_NODE_URL=http://127.0.0.1:8080 rpc-height
+    export RPC_NODE_URL=http://127.0.0.1:8080   # persist for the session
+
+──────────────────────────────────────────────────────────────────────────────
+  rpc-gen fails: "wallet.json already exists"
+──────────────────────────────────────────────────────────────────────────────
+  The keystore file already exists.  The wallet refuses to overwrite it to
+  prevent accidental seed loss.
+
+  To generate a new wallet:
+    mv wallet.json wallet.json.bak   # keep old backup
+    rpc-gen
+
+  To use a different file:
+    rupeecoin-wallet --keys new-wallet.json generate
+
+──────────────────────────────────────────────────────────────────────────────
+  rpc-scan finds 0 notes
+──────────────────────────────────────────────────────────────────────────────
+  Normal if no shielded funds have been sent to this wallet yet.
+  Also check:
+    - Is the node synced?      rpc-height
+    - Are there any outputs?   rpc-outputs 0 10
+
+──────────────────────────────────────────────────────────────────────────────
+  cargo build fails: "linker 'cc' not found" or clang errors
+──────────────────────────────────────────────────────────────────────────────
+  RocksDB requires a C/C++ compiler.
+
+  Ubuntu/Debian:
+    sudo apt install clang libclang-dev build-essential
+
+  Arch:
+    sudo pacman -S clang base-devel
+
+──────────────────────────────────────────────────────────────────────────────
+  cargo test slow on first run
+──────────────────────────────────────────────────────────────────────────────
+  Normal — RocksDB compiles from source on first build (~2-5 minutes).
+  Subsequent builds use the incremental cache and take seconds.
+
+──────────────────────────────────────────────────────────────────────────────
+  rpc-clip reports warnings as errors
+──────────────────────────────────────────────────────────────────────────────
+  rpc-clip passes -D warnings (deny all warnings).  To see warnings without
+  failing:
+    cargo clippy --workspace --manifest-path "$RPC_PROJECT/Cargo.toml"
+
+──────────────────────────────────────────────────────────────────────────────
+  Reset everything to a clean state
+──────────────────────────────────────────────────────────────────────────────
+  Stop the node, wipe chain data, remove the wallet, clean build artifacts:
+
+    rpc-stop
+    rm -rf ~/dev/projects/rupeecoin/rupeecoin-data
+    rm -f  ~/dev/projects/rupeecoin/wallet.json
+    rpc-clean      # optional — removes target/ (slow next build)
+
+  Then start fresh:
+    rpc-release
+    rpc-gen
+    rpc-start 10000
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  PART 13 — TESTNET FAUCET  (rupeecoin-faucet)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  The faucet is a standalone axum web service that drips 100 RPC to any
+  testnet address.  It maintains a keyfile with seed + nonce so state
+  survives restarts.
+
+── Setup (one-time) ──────────────────────────────────────────────────────────
+
+  Step 1: Start node with deterministic validator seed
+    cargo run -p rupeecoin-node -- \
+      --data-dir /tmp/testnet \
+      --stake 10000 \
+      --validator-seed cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+
+    The node prints: "Validator address (UTXO/transparent): <address>"
+    Wait for some blocks to mine (coinbase rewards accumulate there).
+
+  Step 2: Fund the faucet
+    The faucet has its own keypair (separate from the validator).
+    Start the faucet once to see its address, then fund it:
+
+    cargo run -p rupeecoin-faucet -- \
+      --node-rpc http://127.0.0.1:9944 \
+      --keyfile faucet-key.json
+    # Note faucet address from startup log
+
+    cargo run --example fund_faucet -p rupeecoin-faucet -- \
+      --seed cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc \
+      --to   <faucet_address_b58> \
+      --amount 5000 \
+      --node http://127.0.0.1:9944
+
+  Step 3: Restart faucet (it now has balance)
+    cargo run -p rupeecoin-faucet -- \
+      --node-rpc http://127.0.0.1:9944 \
+      --keyfile faucet-key.json
+    # Browse to http://127.0.0.1:8081
+
+── Faucet CLI flags ──────────────────────────────────────────────────────────
+
+  --node-rpc  <url>         Node RPC base URL.   Default: http://127.0.0.1:9944
+  --keyfile   <path>        Seed + nonce JSON.   Default: faucet-key.json
+  --port      <port>        HTTP listen port.    Default: 8081
+  --drip-rpc  <coins>       Drip per request.    Default: 100 RPC
+  --cooldown  <hours>       Rate limit window.   Default: 24 hours
+  --chain-id  <u32>         Chain ID.            Default: 2 (testnet)
+  --network   <name>        Network label shown in UI. Default: "Testnet"
+
+── Faucet endpoints ──────────────────────────────────────────────────────────
+
+  GET  /            Dark-mode SPA — paste address, click "Request 100 RPC"
+  POST /drip        JSON body: {"address":"<b58>"}
+                    200: {"status":"ok","txid":"<hex>"}
+                    429: {"error":"Try again in N minutes"}
+                    400: {"error":"<reason>"}
+  GET  /api/stats   {"faucet_address":"...","balance_micro":N,
+                     "total_drips":N,"drip_amount_micro":N}
+
+── fund_faucet example ───────────────────────────────────────────────────────
+
+  faucet/examples/fund_faucet.rs is a one-shot CLI tool.
+  It derives the same Dilithium3 keypair as a --validator-seed node,
+  fetches its UTXOs, and transfers the requested amount to the faucet.
+
+  Usage:
+    cargo run --example fund_faucet -p rupeecoin-faucet -- \
+      --seed    <64-char hex>     (same as --validator-seed passed to node) \
+      --to      <b58 address>     (faucet address, printed at faucet startup) \
+      --amount  <RPC>             (whole coins, e.g. 5000) \
+      --node    <url>             (default: http://127.0.0.1:9944) \
+      --chain-id <u32>            (default: 2 = testnet)
+
+  Notes:
+    - Nonce hardcoded to 0 — for first spend after wiping/restarting chain.
+    - On an established chain, check the nonce with /rpc/utxos and set --nonce.
+    - Fee is implicit: input_sum − output_sum (change goes back to sender).
+
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  PART 14 — DESKTOP WALLET  (desktop-wallet/)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  A Tauri 2 desktop GUI wallet for Linux / macOS / Windows.
+  Rust backend + dark-mode HTML/JS SPA.  Compatible with desktop-wallet keystore.
+  NOT part of the root Cargo workspace (separate [workspace] in its Cargo.toml).
+
+── System deps (Ubuntu 24.04) ────────────────────────────────────────────────
+
+  sudo apt install \
+    libwebkit2gtk-4.1-dev \
+    libgtk-3-dev \
+    librsvg2-dev \
+    libayatana-appindicator3-dev
+
+  Tauri 2.x uses webkit2gtk-4.1 natively.  Tauri 1.x does NOT work on
+  Ubuntu 24.04 (requires webkit2gtk-4.0 which is not available).
+
+── Build ─────────────────────────────────────────────────────────────────────
+
+  cd desktop-wallet
+  cargo build --release
+  ./target/release/rupeecoin-desktop-wallet
+
+── Features ──────────────────────────────────────────────────────────────────
+
+  Create wallet     → generate HD seed, set passphrase, save encrypted keystore
+  Unlock wallet     → decrypt keystore, load address and HD index
+  Portfolio         → balance in RPC + UTXO count, auto-refresh every 15 s
+  Send              → coin selection (greedy largest-first), Dilithium3 sign,
+                      broadcasts via POST /rpc/tx; recipient is Base58Check addr
+  Receive           → current HD receive address (copyable)
+  UTXO list         → per-UTXO breakdown
+  Settings          → RPC URL + Chain ID persisted to localStorage
+
+── Keystore format ───────────────────────────────────────────────────────────
+
+  Version    : 3
+  KDF        : Argon2id  (64 MiB, 3 iter, 1 lane, 32-byte output)
+  Cipher     : XChaCha20-Poly1305
+  AAD        : b"rupeecoin-keystore-v2"
+  Plaintext  : {"master_seed_hex":"…","receive_index":N}
+  File       : ~/.local/share/network.rupeecoin.wallet/ (Linux XDG)
+
+  Compatible with mobile-wallet keystore (same format, same HD derivation).
+  NOT compatible with CLI wallet v3 keystore (CLI stores PrivacyKeyBundle too).
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  PART 15 — MOBILE WALLET  (mobile-wallet/)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Flutter + flutter_rust_bridge 2 Android wallet.
+  Rust crypto bridge at mobile-wallet/rust/ (standalone Cargo workspace).
+  Targets Android arm64-v8a + x86_64 (minSdk 24 / Android 7.0).
+
+── Rust bridge (mobile-wallet/rust/) ────────────────────────────────────────
+
+  Build independently (no Flutter SDK needed):
+
+    cd mobile-wallet/rust
+    cargo build
+    cargo test     # 5 tests: generate/unlock/advance/change_passphrase + keystore roundtrip
+
+  Exported API (api.rs, annotated #[frb(sync)]):
+
+    generate_wallet(passphrase, keystore_path) → WalletInfo
+    unlock_wallet(passphrase, keystore_path)   → WalletInfo
+    advance_address(passphrase, keystore_path) → WalletInfo
+    check_passphrase(passphrase, keystore_path)→ bool
+    change_passphrase(old, new, path)          → ()
+    validate_address(address)                  → String (hex)
+
+  WalletInfo { address, address_hex, receive_index, keystore_path }
+
+── FRB codegen ───────────────────────────────────────────────────────────────
+
+  After installing Flutter SDK and Rust Android targets:
+
+    rustup target add aarch64-linux-android x86_64-linux-android
+    cargo install flutter_rust_bridge_codegen
+
+    cd mobile-wallet
+    flutter_rust_bridge_codegen generate
+    # Generates: lib/src/rust/frb_generated.dart + rust/src/frb_generated.rs
+
+── Build APK ─────────────────────────────────────────────────────────────────
+
+  Install Flutter: https://docs.flutter.dev/get-started/install/linux/android
+  Install Android Studio + NDK 27.0.12077973
+
+  cd mobile-wallet
+  flutter pub get
+  flutter build apk --release
+  # APK → build/app/outputs/flutter-apk/app-release.apk
+
+── Flutter UI screens ────────────────────────────────────────────────────────
+
+  WelcomeScreen   Create tab (passphrase + confirm) | Unlock tab (passphrase)
+  PortfolioScreen Balance card, address card, Receive / New Address buttons
+                  Auto-refresh every 20 s; node status dot (block height)
+  ReceiveScreen   QR code (qr_flutter), copy address, copy rupeecoin: URI
+  SettingsScreen  RPC URL, chain ID, node status panel, lock wallet
+
+  Send is intentionally disabled (modal: "Phase 11 — STARK too slow on mobile").
+
+── Screens / RPC note ────────────────────────────────────────────────────────
+
+  Android emulator reaches the host at 10.0.2.2 (not 127.0.0.1).
+  network_security_config.xml allows cleartext HTTP to 127.0.0.1 + 10.0.2.2.
+  Change RPC URL in Settings: http://10.0.2.2:9944
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  END OF GUIDE
+  RupeeCoin — Phases 0–10.2 complete.  86 tests + 4 benchmark groups passing.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━                                                                                                                                             

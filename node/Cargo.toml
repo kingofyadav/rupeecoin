@@ -1,0 +1,30 @@
+[package]
+name    = "rupeecoin-node"
+version = "0.3.0"
+edition = "2021"
+
+[[bin]]
+name = "rupeecoin-node"
+path = "src/main.rs"
+
+[dependencies]
+rupeecoin-crypto     = { path = "../core/crypto" }
+rupeecoin-types      = { path = "../core/types" }
+rupeecoin-blockchain = { path = "../core/blockchain" }
+rupeecoin-storage    = { path = "../core/storage" }
+rupeecoin-mempool    = { path = "../core/mempool" }
+rupeecoin-network    = { path = "../core/network" }
+rupeecoin-staking    = { path = "../core/staking" }
+rupeecoin-consensus  = { path = "../core/consensus" }
+rupeecoin-privacy    = { path = "../core/privacy" }
+rupeecoin-zkproof    = { path = "../core/zkproof" }
+tokio                = { workspace = true }
+anyhow               = { workspace = true }
+tracing              = { workspace = true }
+tracing-subscriber   = { workspace = true }
+libp2p               = { workspace = true }
+axum                 = { workspace = true }
+serde_json           = { workspace = true }
+serde                = { workspace = true }
+bincode              = { workspace = true }
+hex                  = { workspace = true }

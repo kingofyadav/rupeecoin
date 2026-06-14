@@ -1,0 +1,13 @@
+[package]
+name    = "rupeecoin-mempool"
+version = "0.3.0"
+edition = "2021"
+
+[dependencies]
+rupeecoin-crypto = { path = "../crypto" }
+rupeecoin-types  = { path = "../types" }
+rupeecoin-utxo   = { path = "../utxo" }
+thiserror        = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }

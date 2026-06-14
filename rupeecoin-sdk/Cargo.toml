@@ -1,0 +1,24 @@
+[package]
+name    = "rupeecoin-sdk"
+version = "0.3.0"
+edition = "2021"
+description = "RupeeCoin Rust SDK v0.1 — key generation, transaction construction, RPC client"
+license = "MIT"
+keywords = ["rupeecoin", "blockchain", "post-quantum", "privacy"]
+
+[dependencies]
+rupeecoin-crypto  = { path = "../core/crypto" }
+rupeecoin-types   = { path = "../core/types" }
+rupeecoin-privacy = { path = "../core/privacy" }
+blake3            = { workspace = true }
+bincode           = { workspace = true }
+serde             = { workspace = true }
+serde_json        = { workspace = true }
+hex               = { workspace = true }
+anyhow            = { workspace = true }
+thiserror         = { workspace = true }
+rand              = { workspace = true }
+ureq              = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
