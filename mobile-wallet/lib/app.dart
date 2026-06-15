@@ -28,7 +28,7 @@ class RupeeCoinWalletApp extends StatelessWidget {
         brightness: Brightness.dark,
       ),
       scaffoldBackgroundColor: const Color(0xFF0D1117),
-      cardTheme: CardTheme(
+      cardTheme: CardThemeData(
         color: const Color(0xFF161B22),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
         elevation: 0,
