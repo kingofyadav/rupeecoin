@@ -1032,6 +1032,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "evm2rvm"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "rupeecoin-rvm",
+]
+
+[[package]]
 name = "fastrand"
 version = "2.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3471,6 +3479,16 @@ dependencies = [
  "rand 0.8.6",
  "rupeecoin-crypto",
  "rupeecoin-zkproof",
+ "serde",
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "rupeecoin-rvm"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "rupeecoin-crypto",
  "serde",
  "thiserror 1.0.69",
 ]

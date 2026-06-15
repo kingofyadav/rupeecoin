@@ -1,9 +1,11 @@
 pub mod attestation;
 pub mod block;
+pub mod contract;
 pub mod transaction;
 
 pub use attestation::{Attestation, SlashingEvidence, ValidatorAnnouncement};
 pub use block::{Block, BlockHeader};
+pub use contract::{ContractCall, ContractDeploy};
 pub use transaction::{OutPoint, Transaction, TxInput, TxOutput};
 
 /// Micro-RPC per full coin (8 decimal places, like satoshis).

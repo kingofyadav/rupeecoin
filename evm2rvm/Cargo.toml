@@ -1,0 +1,12 @@
+[package]
+name    = "evm2rvm"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "evm2rvm"
+path = "src/main.rs"
+
+[dependencies]
+rupeecoin-rvm = { path = "../core/rvm" }
+hex           = { workspace = true }

@@ -1,0 +1,10 @@
+[package]
+name    = "rupeecoin-rvm"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+rupeecoin-crypto = { path = "../crypto" }
+serde            = { workspace = true }
+thiserror        = { workspace = true }
+hex              = { workspace = true }
