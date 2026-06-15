@@ -16,6 +16,10 @@ crate-type = ["cdylib", "staticlib"]
 rupeecoin-sdk    = { path = "../../rupeecoin-sdk" }
 rupeecoin-crypto = { path = "../../core/crypto" }
 rupeecoin-types  = { path = "../../core/types" }
+rupeecoin-zkproof = { path = "../../core/zkproof" }
+
+# Async runtime for mobile prover (spawn_blocking keeps the FRB thread pool free)
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros"] }
 
 # FRB 2.x runtime — proc-macro only at this stage; generated glue added by codegen
 flutter_rust_bridge = "=2.12.0"
