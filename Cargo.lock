@@ -1033,7 +1033,7 @@ dependencies = [
 
 [[package]]
 name = "evm2rvm"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "hex",
  "rupeecoin-rvm",
@@ -3310,7 +3310,7 @@ dependencies = [
 
 [[package]]
 name = "rupeecoin-blockchain"
-version = "0.3.0"
+version = "1.0.0"
 dependencies = [
  "bincode",
  "rupeecoin-consensus",
@@ -3326,7 +3326,7 @@ dependencies = [
 
 [[package]]
 name = "rupeecoin-consensus"
-version = "0.3.0"
+version = "1.0.0"
 dependencies = [
  "rupeecoin-crypto",
  "rupeecoin-staking",
@@ -3337,7 +3337,7 @@ dependencies = [
 
 [[package]]
 name = "rupeecoin-crypto"
-version = "0.3.0"
+version = "1.0.0"
 dependencies = [
  "bincode",
  "blake3",
@@ -3353,7 +3353,7 @@ dependencies = [
 
 [[package]]
 name = "rupeecoin-dashboard"
-version = "0.3.0"
+version = "1.0.0"
 dependencies = [
  "clap",
  "crossterm",
@@ -3365,7 +3365,7 @@ dependencies = [
 
 [[package]]
 name = "rupeecoin-economics"
-version = "0.3.0"
+version = "1.0.0"
 dependencies = [
  "proptest",
  "rupeecoin-crypto",
@@ -3376,7 +3376,7 @@ dependencies = [
 
 [[package]]
 name = "rupeecoin-explorer"
-version = "0.3.0"
+version = "1.0.0"
 dependencies = [
  "axum",
  "clap",
@@ -3394,7 +3394,7 @@ dependencies = [
 
 [[package]]
 name = "rupeecoin-faucet"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -3414,7 +3414,7 @@ dependencies = [
 
 [[package]]
 name = "rupeecoin-mempool"
-version = "0.3.0"
+version = "1.0.0"
 dependencies = [
  "proptest",
  "rupeecoin-crypto",
@@ -3425,7 +3425,7 @@ dependencies = [
 
 [[package]]
 name = "rupeecoin-network"
-version = "0.3.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3443,7 +3443,7 @@ dependencies = [
 
 [[package]]
 name = "rupeecoin-node"
-version = "0.3.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -3469,7 +3469,7 @@ dependencies = [
 
 [[package]]
 name = "rupeecoin-privacy"
-version = "0.3.0"
+version = "1.0.0"
 dependencies = [
  "bincode",
  "blake3",
@@ -3485,7 +3485,7 @@ dependencies = [
 
 [[package]]
 name = "rupeecoin-rvm"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "hex",
  "rupeecoin-crypto",
@@ -3495,7 +3495,7 @@ dependencies = [
 
 [[package]]
 name = "rupeecoin-sdk"
-version = "0.3.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "bincode",
@@ -3514,7 +3514,7 @@ dependencies = [
 
 [[package]]
 name = "rupeecoin-staking"
-version = "0.3.0"
+version = "1.0.0"
 dependencies = [
  "rupeecoin-crypto",
  "rupeecoin-types",
@@ -3524,7 +3524,7 @@ dependencies = [
 
 [[package]]
 name = "rupeecoin-storage"
-version = "0.3.0"
+version = "1.0.0"
 dependencies = [
  "bincode",
  "rocksdb",
@@ -3537,7 +3537,7 @@ dependencies = [
 
 [[package]]
 name = "rupeecoin-tests"
-version = "0.3.0"
+version = "1.0.0"
 dependencies = [
  "bincode",
  "criterion",
@@ -3558,19 +3558,20 @@ dependencies = [
 
 [[package]]
 name = "rupeecoin-types"
-version = "0.3.0"
+version = "1.0.0"
 dependencies = [
  "bincode",
  "hex",
  "rupeecoin-crypto",
  "rupeecoin-privacy",
  "serde",
+ "serde_json",
  "thiserror 1.0.69",
 ]
 
 [[package]]
 name = "rupeecoin-utxo"
-version = "0.3.0"
+version = "1.0.0"
 dependencies = [
  "bincode",
  "rupeecoin-crypto",
@@ -3580,7 +3581,7 @@ dependencies = [
 
 [[package]]
 name = "rupeecoin-wallet"
-version = "0.3.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "argon2",
@@ -3605,7 +3606,7 @@ dependencies = [
 
 [[package]]
 name = "rupeecoin-zkproof"
-version = "0.3.0"
+version = "1.0.0"
 dependencies = [
  "bincode",
  "blake3",
