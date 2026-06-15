@@ -12,15 +12,11 @@ use crate::prover::{
     SpendWitness,
 };
 
-// ── Public types ──────────────────────────────────────────────────────────────
-
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StarkSpendProof {
     pub proof_bytes: Vec<u8>,
     pub anchor_felts: [u64; 4],
 }
-
-// ── Errors ────────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Error)]
 pub enum ZkError {
@@ -34,40 +30,39 @@ pub enum ZkError {
     Deserialisation(String),
 }
 
-// ── prove / verify ────────────────────────────────────────────────────────────
-
-// Goldilocks p = 2^64 - 2^32 + 1; Felt::new(v) requires v < p.
 const GOLDILOCKS_P: u64 = 0xFFFF_FFFF_0000_0001;
 
 #[inline(always)]
 fn felt(v: u64) -> Felt {
-    Felt::new(if v >= GOLDILOCKS_P {
-        v - GOLDILOCKS_P
-    } else {
-        v
-    })
+    Felt::new(if v >= GOLDILOCKS_P { v - GOLDILOCKS_P } else { v })
 }
 
+/// Generate a STARK spend proof.
+///
+/// `is_right[k]` is true when the spending note is the RIGHT child of its parent
+/// at Merkle level k.  The `siblings` and `is_right` arrays come directly from
+/// `CommitmentTree::auth_path()`.
 pub fn prove_spend(
     nullifier_key: [u64; 4],
     note_commitment: [u64; 4],
     siblings: [[u64; 4]; 20],
+    is_right: [bool; 20],
 ) -> Result<(StarkSpendProof, [u64; 4]), ZkError> {
     let nk: [Felt; 4] = nullifier_key.map(felt);
     let cm: [Felt; 4] = note_commitment.map(felt);
     let sibs: [[Felt; 4]; 20] = siblings.map(|s| s.map(felt));
 
     let nullifier = compute_nullifier(nk, cm);
-    let anchor = compute_merkle_root(cm, &sibs);
+    let anchor = compute_merkle_root(cm, &sibs, &is_right);
 
     let witness = SpendWitness {
         nullifier_key: nk,
         note_commitment: cm,
         siblings: sibs,
+        is_right,
     };
 
     let trace = build_trace(&witness);
-
     let options = default_proof_options();
     let prover = SpendProver::new(witness, options);
 
@@ -79,21 +74,9 @@ pub fn prove_spend(
     let anchor_felts = anchor.map(|f| f.as_int());
     let nullifier_u64 = nullifier.map(|f| f.as_int());
 
-    Ok((
-        StarkSpendProof {
-            proof_bytes,
-            anchor_felts,
-        },
-        nullifier_u64,
-    ))
+    Ok((StarkSpendProof { proof_bytes, anchor_felts }, nullifier_u64))
 }
 
-/// Verify a STARK spend proof.
-///
-/// `nullifier_u64` is the public nullifier.  The anchor is taken directly from
-/// `proof.anchor_felts` — the values baked in at prove time — so callers do not
-/// need to pass it separately.  Callers should independently check that
-/// `proof.anchor_felts` corresponds to a recent known Blake3 tree root.
 pub fn verify_spend(proof: &StarkSpendProof, nullifier_u64: [u64; 4]) -> Result<(), ZkError> {
     let raw = winterfell::Proof::from_bytes(&proof.proof_bytes)
         .map_err(|e| ZkError::Deserialisation(format!("{e:?}")))?;
@@ -116,20 +99,12 @@ pub fn verify_spend(proof: &StarkSpendProof, nullifier_u64: [u64; 4]) -> Result<
     .map_err(|_| ZkError::VerificationFailed)
 }
 
-/// Verify a STARK spend proof from its raw components.
-///
-/// Convenience wrapper for callers (e.g. `rupeecoin-privacy`) that hold
-/// `proof_bytes`, `anchor_felts`, and `nullifier_felts` as separate fields
-/// and want to avoid constructing a [`StarkSpendProof`] from a foreign crate.
 pub fn verify_spend_raw(
     proof_bytes: &[u8],
     anchor_felts: [u64; 4],
     nullifier_felts: [u64; 4],
 ) -> Result<(), ZkError> {
-    let proof = StarkSpendProof {
-        proof_bytes: proof_bytes.to_vec(),
-        anchor_felts,
-    };
+    let proof = StarkSpendProof { proof_bytes: proof_bytes.to_vec(), anchor_felts };
     verify_spend(&proof, nullifier_felts)
 }
 
@@ -137,28 +112,39 @@ pub fn verify_spend_raw(
 mod tests {
     use super::*;
 
+    // All-left-child path: is_right = [false; 20]
+    const NK: [u64; 4] = [1, 2, 3, 4];
+    const CM: [u64; 4] = [5, 6, 7, 8];
+    const SIBLINGS: [[u64; 4]; 20] = [[9, 10, 11, 12]; 20];
+    const IS_RIGHT_ALL_LEFT: [bool; 20] = [false; 20];
+    // Mixed path: leaf at index 3 → is_right = [true, true, false, false, ...]
+    const IS_RIGHT_MIXED: [bool; 20] = {
+        let mut b = [false; 20];
+        b[0] = true;
+        b[1] = true;
+        b
+    };
+
     #[test]
-    fn prove_and_verify_roundtrip() {
-        let nk: [u64; 4] = [1, 2, 3, 4];
-        let cm: [u64; 4] = [5, 6, 7, 8];
-        let siblings: [[u64; 4]; 20] = [[9, 10, 11, 12]; 20];
-
+    fn prove_and_verify_all_left() {
         let (proof, nullifier) =
-            prove_spend(nk, cm, siblings).expect("prove_spend must succeed");
-
+            prove_spend(NK, CM, SIBLINGS, IS_RIGHT_ALL_LEFT).expect("prove_spend must succeed");
         verify_spend_raw(&proof.proof_bytes, proof.anchor_felts, nullifier)
             .expect("valid proof must verify");
     }
 
     #[test]
-    fn verify_wrong_nullifier_fails() {
-        let nk: [u64; 4] = [1, 2, 3, 4];
-        let cm: [u64; 4] = [5, 6, 7, 8];
-        let siblings: [[u64; 4]; 20] = [[9, 10, 11, 12]; 20];
-
+    fn prove_and_verify_mixed_direction() {
         let (proof, nullifier) =
-            prove_spend(nk, cm, siblings).expect("prove_spend must succeed");
+            prove_spend(NK, CM, SIBLINGS, IS_RIGHT_MIXED).expect("prove_spend mixed must succeed");
+        verify_spend_raw(&proof.proof_bytes, proof.anchor_felts, nullifier)
+            .expect("mixed direction proof must verify");
+    }
 
+    #[test]
+    fn verify_wrong_nullifier_fails() {
+        let (proof, nullifier) =
+            prove_spend(NK, CM, SIBLINGS, IS_RIGHT_ALL_LEFT).expect("prove_spend must succeed");
         let bad = [nullifier[0].wrapping_add(1), nullifier[1], nullifier[2], nullifier[3]];
         assert!(
             verify_spend_raw(&proof.proof_bytes, proof.anchor_felts, bad).is_err(),

@@ -20,6 +20,7 @@ use rupeecoin_zkproof::{prove_spend, verify_spend};
 const NK: [u64; 4] = [1, 2, 3, 4];
 const CM: [u64; 4] = [5, 6, 7, 8];
 const SIBLINGS: [[u64; 4]; 20] = [[9, 10, 11, 12]; 20];
+const IS_RIGHT: [bool; 20] = [false; 20];
 
 fn bench_prove(c: &mut Criterion) {
     let mut group = c.benchmark_group("privacy_proof");
@@ -28,7 +29,7 @@ fn bench_prove(c: &mut Criterion) {
     group.measurement_time(Duration::from_secs(90));
 
     group.bench_function("prove_spend", |b| {
-        b.iter(|| black_box(prove_spend(NK, CM, SIBLINGS).expect("prove_spend")))
+        b.iter(|| black_box(prove_spend(NK, CM, SIBLINGS, IS_RIGHT).expect("prove_spend")))
     });
 
     group.finish();
@@ -36,7 +37,7 @@ fn bench_prove(c: &mut Criterion) {
 
 fn bench_verify(c: &mut Criterion) {
     // Pre-generate one proof to reuse across verification samples.
-    let (proof, nullifier) = prove_spend(NK, CM, SIBLINGS).expect("setup prove_spend");
+    let (proof, nullifier) = prove_spend(NK, CM, SIBLINGS, IS_RIGHT).expect("setup prove_spend");
 
     let mut group = c.benchmark_group("privacy_proof");
     group.sample_size(30);

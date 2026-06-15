@@ -259,23 +259,22 @@ fn cmd_send(
         let (merkle_path, proof_anchor) = rpc.get_merkle_path(owned.index)?;
         anyhow::ensure!(proof_anchor == anchor, "merkle path anchor mismatch — try again");
 
-        // Build STARK proof: reinterpret BLAKE3 bytes as Goldilocks field elements.
-        // The first 20 levels of the Blake3 32-level path feed the 20-level Poseidon
-        // STARK circuit.  The BLAKE3 anchor still enforces actual tree membership via
-        // tx.anchor; the STARK proves note knowledge under Poseidon (Phase 8.1).
+        // Commitment tree now uses Poseidon (Phase 11.1). Siblings are Poseidon
+        // field-element values packed as 32 LE bytes; reinterpret as [u64; 4].
+        // Direction bits (is_right) come from the auth path and tell the circuit
+        // whether the spending note is the right child at each Merkle level.
         let nk_u64 = hash_to_felt4(&ks.bundle.nullifier_key.0);
         let cm_u64 = hash_to_felt4(owned.commitment.0.as_bytes());
-        let siblings_u64: [[u64; 4]; 20] = {
-            let mut arr = [[0u64; 4]; 20];
-            for (i, (sib, _)) in merkle_path.path.iter().take(20).enumerate() {
-                arr[i] = hash_to_felt4(sib.as_bytes());
-            }
-            arr
-        };
+        let mut siblings_u64 = [[0u64; 4]; 20];
+        let mut is_right = [false; 20];
+        for (i, (sib, right)) in merkle_path.path.iter().take(20).enumerate() {
+            siblings_u64[i] = hash_to_felt4(sib.as_bytes());
+            is_right[i] = *right;
+        }
 
         println!("  Generating STARK proof for note {}…", owned.index);
         let (zk, nullifier_felts) =
-            rupeecoin_zkproof::prove_spend(nk_u64, cm_u64, siblings_u64)
+            rupeecoin_zkproof::prove_spend(nk_u64, cm_u64, siblings_u64, is_right)
                 .map_err(|e| anyhow::anyhow!("STARK proof generation failed: {e}"))?;
 
         let stark = StarkSpendProof {

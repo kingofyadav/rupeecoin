@@ -4,6 +4,7 @@ pub mod prover;
 pub mod types;
 
 pub use circuit::{SpendCircuit, SpendPublicInputs};
+pub use hash::compress_bytes as poseidon_compress_bytes;
 pub use prover::{
     build_trace, compute_merkle_root, compute_nullifier, default_proof_options, SpendProver,
     SpendWitness,

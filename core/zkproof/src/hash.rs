@@ -59,6 +59,32 @@ pub fn compress(left: [Felt; 4], right: [Felt; 4]) -> [Felt; 4] {
     [state[0], state[1], state[2], state[3]]
 }
 
+const GOLDILOCKS_P: u64 = 0xFFFF_FFFF_0000_0001;
+
+#[inline]
+fn bytes_to_felt4(b: &[u8; 32]) -> [Felt; 4] {
+    core::array::from_fn(|i| {
+        let v = u64::from_le_bytes(b[i * 8..(i + 1) * 8].try_into().unwrap());
+        Felt::new(if v >= GOLDILOCKS_P { v - GOLDILOCKS_P } else { v })
+    })
+}
+
+#[inline]
+fn felt4_to_bytes(f: [Felt; 4]) -> [u8; 32] {
+    let mut out = [0u8; 32];
+    for (i, felt) in f.iter().enumerate() {
+        out[i * 8..(i + 1) * 8].copy_from_slice(&felt.as_int().to_le_bytes());
+    }
+    out
+}
+
+/// Poseidon compression over 32-byte inputs — the same operation used inside the
+/// STARK circuit.  Both the commitment tree and the circuit use this function,
+/// so the on-chain tree root and the STARK anchor are the same value.
+pub fn compress_bytes(left: &[u8; 32], right: &[u8; 32]) -> [u8; 32] {
+    felt4_to_bytes(compress(bytes_to_felt4(left), bytes_to_felt4(right)))
+}
+
 // Evaluate one Poseidon round transition constraint for generic field element E.
 // Inputs: current 8-element state slice, next 8-element state slice, round constants,
 // selector (0 or 1), and output result slice (8 elements, must start at result[0]).
