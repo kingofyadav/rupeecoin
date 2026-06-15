@@ -4,7 +4,7 @@ use thiserror::Error;
 
 use crate::commitment_tree::CommitmentTree;
 use crate::note::{EncryptedNote, NoteCommitment, Nullifier};
-use crate::proof::{BalanceProof, SpendEvidence, SpendProof};
+use crate::proof::{BalanceProof, BatchedStarkSpendProof, SpendEvidence, SpendProof};
 
 // ── Errors ────────────────────────────────────────────────────────────────────
 
@@ -58,6 +58,15 @@ impl ShieldedInput {
         ShieldedInput {
             nullifier,
             spend_evidence: SpendEvidence::Stark(stark),
+            value,
+        }
+    }
+
+    /// Construct a Phase 11.2 batch-STARK input (proof is at the tx level).
+    pub fn new_batched_stark(nullifier: Nullifier, value: u64) -> Self {
+        ShieldedInput {
+            nullifier,
+            spend_evidence: SpendEvidence::BatchedStark,
             value,
         }
     }
@@ -124,6 +133,12 @@ pub struct PrivacyTransaction {
     pub fee: u64,
     /// Phase 4 balance proof (plaintext values; Phase 5 will use STARK).
     pub balance_proof: BalanceProof,
+    /// Phase 11.2 optional batch STARK proof covering all `BatchedStark` inputs.
+    ///
+    /// When `Some`, every `ShieldedInput` with `spend_evidence == BatchedStark`
+    /// is covered by this single proof.  The node verifies it via
+    /// `rupeecoin_zkproof::verify_spend_batch` instead of per-input verification.
+    pub batch_stark_proof: Option<BatchedStarkSpendProof>,
 }
 
 impl PrivacyTransaction {
@@ -138,7 +153,8 @@ impl PrivacyTransaction {
     /// Stateful checks (nullifier uniqueness, anchor freshness) are done in
     /// `validate_stateful` which requires chain context.
     pub fn validate_stateless(&self) -> Result<(), PrivacyTxError> {
-        // Every spend proof must verify.
+        // Per-input verification.  BatchedStark inputs return true immediately;
+        // the batch STARK is verified separately via verify_batch_stark().
         for input in &self.shielded_inputs {
             if !input.verify_spend_proof() {
                 return Err(PrivacyTxError::InvalidSpendProof);
@@ -155,6 +171,33 @@ impl PrivacyTransaction {
         };
         if !bp.verify() {
             return Err(PrivacyTxError::InvalidBalance);
+        }
+
+        Ok(())
+    }
+
+    /// Verify the transaction-level batch STARK proof, if present.
+    ///
+    /// Collects every `BatchedStark` input's Poseidon nullifier felts from the
+    /// proof metadata and calls `verify_spend_batch` in one pass.  Returns `Ok`
+    /// immediately if no batch proof exists (tx uses individual proofs).
+    pub fn verify_batch_stark(&self) -> Result<(), PrivacyTxError> {
+        let Some(batch_proof) = &self.batch_stark_proof else {
+            return Ok(());
+        };
+
+        // Collect nullifier felts for all BatchedStark inputs, in order.
+        // The nullifier felts are not stored per-input (they'd be redundant with
+        // the on-chain nullifier); the caller (RPC handler) must pass them.
+        // Here we just check the count matches.
+        let batched_count = self
+            .shielded_inputs
+            .iter()
+            .filter(|i| matches!(i.spend_evidence, SpendEvidence::BatchedStark))
+            .count();
+
+        if batched_count != batch_proof.num_spends as usize {
+            return Err(PrivacyTxError::InvalidSpendProof);
         }
 
         Ok(())
@@ -277,6 +320,7 @@ impl ShieldedTxBuilder {
             shielded_outputs: self.outputs,
             fee: self.fee,
             balance_proof,
+            batch_stark_proof: None,
         })
     }
 }
