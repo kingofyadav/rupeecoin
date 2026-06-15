@@ -7,6 +7,7 @@ use flutter_rust_bridge::frb;
 
 use rupeecoin_crypto::{decode_address, encode_address};
 use rupeecoin_sdk::Wallet;
+use rupeecoin_zkproof::{prove_spend, prove_spend_batch, BatchSpendInput};
 
 use crate::keystore::{self, KeystoreInner};
 
@@ -101,6 +102,142 @@ pub fn validate_address(address: String) -> Result<String, String> {
     Ok(hex::encode(raw.0))
 }
 
+// ── Phase 11.4 — Mobile prover ────────────────────────────────────────────────
+
+/// Result of a STARK spend proof for a single shielded input.
+pub struct SpendProofResult {
+    /// Raw Winterfell proof bytes — pass directly to `verify_spend_mobile`.
+    pub proof_bytes: Vec<u8>,
+    /// Poseidon Merkle anchor (LE-bytes of 4 Goldilocks u64s, 32 bytes total).
+    pub anchor_bytes: Vec<u8>,
+    /// Poseidon nullifier (LE-bytes of 4 Goldilocks u64s, 32 bytes total).
+    pub nullifier_bytes: Vec<u8>,
+}
+
+/// Result of a batched STARK spend proof (up to 10 shielded inputs).
+pub struct BatchSpendProofResult {
+    pub proof_bytes: Vec<u8>,
+    pub anchor_bytes: Vec<u8>,
+    /// Nullifiers in input order, each 32 bytes LE-encoded Goldilocks.
+    pub nullifier_bytes: Vec<Vec<u8>>,
+    pub num_spends: u32,
+}
+
+/// Convert 32 raw bytes into the `[u64; 4]` Goldilocks encoding used by the STARK circuit.
+fn bytes_to_felt4(b: &[u8]) -> Result<[u64; 4], String> {
+    if b.len() != 32 {
+        return Err(format!("expected 32 bytes, got {}", b.len()));
+    }
+    Ok(std::array::from_fn(|i| {
+        u64::from_le_bytes(b[8 * i..8 * i + 8].try_into().unwrap())
+    }))
+}
+
+fn felt4_to_bytes(felts: &[u64; 4]) -> Vec<u8> {
+    felts.iter().flat_map(|f| f.to_le_bytes()).collect()
+}
+
+/// Generate a STARK spend proof on a background thread so the Flutter UI stays responsive.
+///
+/// All byte slices use the Goldilocks-LE encoding of the STARK circuit:
+/// 32 bytes = 4 × u64-le = one Poseidon state element group.
+///
+/// `nk_bytes`      — 32-byte nullifier key (Goldilocks-LE)
+/// `cm_bytes`      — 32-byte note commitment (Goldilocks-LE)
+/// `siblings_bytes` — 20 × 32-byte sibling hashes (level 0 first)
+/// `is_right`      — 20 direction bits (true = spending note is RIGHT child)
+///
+/// Proof generation takes 3–10 s on mobile hardware; call this from an async
+/// Dart context so the UI thread is never blocked.
+pub async fn prove_spend_mobile(
+    nk_bytes: Vec<u8>,
+    cm_bytes: Vec<u8>,
+    siblings_bytes: Vec<Vec<u8>>,
+    is_right: Vec<bool>,
+) -> Result<SpendProofResult, String> {
+    if siblings_bytes.len() != 20 {
+        return Err(format!("need 20 siblings, got {}", siblings_bytes.len()));
+    }
+    if is_right.len() != 20 {
+        return Err(format!("need 20 is_right flags, got {}", is_right.len()));
+    }
+
+    let nk   = bytes_to_felt4(&nk_bytes)?;
+    let cm   = bytes_to_felt4(&cm_bytes)?;
+    let mut sibs = [[0u64; 4]; 20];
+    for (i, s) in siblings_bytes.iter().enumerate() {
+        sibs[i] = bytes_to_felt4(s)?;
+    }
+    let ir: [bool; 20] = is_right.try_into().map_err(|_| "is_right length mismatch")?;
+
+    // Run the CPU-intensive prover in a dedicated OS thread so the FRB
+    // tokio runtime (which handles Dart↔Rust I/O) is never blocked.
+    let result = tokio::task::spawn_blocking(move || prove_spend(nk, cm, sibs, ir))
+        .await
+        .map_err(|e| format!("prover thread panicked: {e}"))?
+        .map_err(|e| format!("prove_spend failed: {e}"))?;
+
+    let (proof, nullifier) = result;
+    Ok(SpendProofResult {
+        proof_bytes:   proof.proof_bytes,
+        anchor_bytes:  felt4_to_bytes(&proof.anchor_felts),
+        nullifier_bytes: felt4_to_bytes(&nullifier),
+    })
+}
+
+/// Generate a batched STARK spend proof covering up to 10 inputs on a background thread.
+///
+/// All inputs must belong to the same commitment tree snapshot (same anchor).
+/// Returns a single proof that verifies in the same time as one individual proof.
+pub async fn prove_spend_batch_mobile(
+    nk_bytes_list:       Vec<Vec<u8>>,
+    cm_bytes_list:       Vec<Vec<u8>>,
+    siblings_bytes_list: Vec<Vec<Vec<u8>>>,
+    is_right_list:       Vec<Vec<bool>>,
+) -> Result<BatchSpendProofResult, String> {
+    let n = nk_bytes_list.len();
+    if n == 0 || n > 10 {
+        return Err(format!("batch size must be 1–10, got {n}"));
+    }
+    if cm_bytes_list.len() != n || siblings_bytes_list.len() != n || is_right_list.len() != n {
+        return Err("all input lists must have the same length".into());
+    }
+
+    let mut inputs = Vec::with_capacity(n);
+    for i in 0..n {
+        let nk = bytes_to_felt4(&nk_bytes_list[i])?;
+        let cm = bytes_to_felt4(&cm_bytes_list[i])?;
+        if siblings_bytes_list[i].len() != 20 {
+            return Err(format!("input {i}: need 20 siblings"));
+        }
+        if is_right_list[i].len() != 20 {
+            return Err(format!("input {i}: need 20 is_right flags"));
+        }
+        let mut sibs = [[0u64; 4]; 20];
+        for (j, s) in siblings_bytes_list[i].iter().enumerate() {
+            sibs[j] = bytes_to_felt4(s)?;
+        }
+        let ir: [bool; 20] = is_right_list[i]
+            .clone()
+            .try_into()
+            .map_err(|_| format!("input {i}: is_right length mismatch"))?;
+        inputs.push(BatchSpendInput { nullifier_key: nk, note_commitment: cm, siblings: sibs, is_right: ir });
+    }
+
+    let result = tokio::task::spawn_blocking(move || prove_spend_batch(&inputs))
+        .await
+        .map_err(|e| format!("prover thread panicked: {e}"))?
+        .map_err(|e| format!("prove_spend_batch failed: {e}"))?;
+
+    let (proof, nullifiers) = result;
+    Ok(BatchSpendProofResult {
+        proof_bytes:    proof.proof_bytes,
+        anchor_bytes:   felt4_to_bytes(&proof.anchor_felts),
+        nullifier_bytes: nullifiers.iter().map(felt4_to_bytes).collect(),
+        num_spends:     proof.num_spends,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -137,5 +274,77 @@ mod tests {
         change_passphrase("old".into(), "new".into(), path.clone()).unwrap();
         assert!(unlock_wallet("new".into(), path.clone()).is_ok());
         assert!(unlock_wallet("old".into(), path).is_err());
+    }
+
+    // ── Phase 11.4 mobile prover tests ───────────────────────────────────────
+
+    const NK: [u64; 4] = [1, 2, 3, 4];
+    const CM: [u64; 4] = [5, 6, 7, 8];
+    const SIB: [u64; 4] = [9, 10, 11, 12];
+
+    fn felt4_bytes(felts: &[u64; 4]) -> Vec<u8> {
+        felts.iter().flat_map(|f| f.to_le_bytes()).collect()
+    }
+
+    fn sibling_list() -> Vec<Vec<u8>> {
+        (0..20).map(|_| felt4_bytes(&SIB)).collect()
+    }
+
+    #[tokio::test]
+    async fn prove_spend_mobile_roundtrip() {
+        let nk_b = felt4_bytes(&NK);
+        let cm_b = felt4_bytes(&CM);
+        let sibs = sibling_list();
+        let ir = vec![false; 20];
+
+        let result = prove_spend_mobile(nk_b, cm_b, sibs, ir)
+            .await
+            .expect("prove_spend_mobile must succeed");
+
+        assert_eq!(result.anchor_bytes.len(), 32);
+        assert_eq!(result.nullifier_bytes.len(), 32);
+        assert!(!result.proof_bytes.is_empty());
+    }
+
+    #[tokio::test]
+    async fn prove_spend_mobile_bad_siblings_count_errors() {
+        let nk_b = felt4_bytes(&NK);
+        let cm_b = felt4_bytes(&CM);
+        let sibs: Vec<Vec<u8>> = (0..5).map(|_| felt4_bytes(&SIB)).collect(); // wrong count
+        let ir = vec![false; 20];
+
+        assert!(prove_spend_mobile(nk_b, cm_b, sibs, ir).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn prove_spend_batch_mobile_two_inputs() {
+        // Two leaves at positions 0 and 1 sharing the same Merkle root.
+        let cm_a: [u64; 4] = [5, 6, 7, 8];
+        let cm_b: [u64; 4] = [50, 60, 70, 80];
+        let upper_sib: [u64; 4] = [9, 10, 11, 12];
+        let nk_a: [u64; 4] = [1, 2, 3, 4];
+        let nk_b: [u64; 4] = [10, 20, 30, 40];
+
+        let mut sibs_a = vec![felt4_bytes(&cm_b)];
+        sibs_a.extend((0..19).map(|_| felt4_bytes(&upper_sib)));
+
+        let mut sibs_b = vec![felt4_bytes(&cm_a)];
+        sibs_b.extend((0..19).map(|_| felt4_bytes(&upper_sib)));
+
+        let mut ir_b = vec![false; 20];
+        ir_b[0] = true;
+
+        let result = prove_spend_batch_mobile(
+            vec![felt4_bytes(&nk_a), felt4_bytes(&nk_b)],
+            vec![felt4_bytes(&cm_a), felt4_bytes(&cm_b)],
+            vec![sibs_a, sibs_b],
+            vec![vec![false; 20], ir_b],
+        )
+        .await
+        .expect("batch prove must succeed for N=2");
+
+        assert_eq!(result.num_spends, 2);
+        assert_eq!(result.nullifier_bytes.len(), 2);
+        assert_eq!(result.anchor_bytes.len(), 32);
     }
 }

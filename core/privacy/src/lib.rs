@@ -15,7 +15,7 @@ pub use proof::{
 };
 pub use transaction::{
     PrivacyBlockApply, PrivacyTransaction, PrivacyTxError, ShieldedInput, ShieldedOutput,
-    ShieldedTxBuilder,
+    ShieldedTxBuilder, MAX_NOTE_VALUE,
 };
 
 #[cfg(test)]
@@ -111,6 +111,90 @@ mod tests {
         assert!(rp.verify(note.value, &note.rcm));
         // Wrong value fails
         assert!(!rp.verify(note.value + 1, &note.rcm));
+    }
+
+    // ── Phase 11.5 output well-formedness tests ───────────────────────────────
+
+    fn make_valid_output(value: u64, recipient: &PrivacyKeyBundle) -> ShieldedOutput {
+        let note = Note::new(value, recipient.payment_address.clone());
+        let cm = note.commitment();
+        let enc = EncryptedNote::encrypt(&note, &recipient.view_key.public);
+        ShieldedOutput::new(cm, enc, value)
+    }
+
+    #[test]
+    fn output_zero_value_rejected() {
+        let bob = PrivacyKeyBundle::generate();
+        // Manually construct a zero-value output (bypassing builder)
+        let note = Note::new(1, bob.payment_address.clone());
+        let cm = note.commitment();
+        let enc = EncryptedNote::encrypt(&note, &bob.view_key.public);
+        let mut out = ShieldedOutput::new(cm, enc, 1);
+        out.value = 0; // Force zero value
+        assert!(matches!(out.validate(), Err(PrivacyTxError::InvalidOutputValue(_))));
+    }
+
+    #[test]
+    fn output_value_exceeds_cap_rejected() {
+        let bob = PrivacyKeyBundle::generate();
+        let note = Note::new(1, bob.payment_address.clone());
+        let cm = note.commitment();
+        let enc = EncryptedNote::encrypt(&note, &bob.view_key.public);
+        let mut out = ShieldedOutput::new(cm, enc, 1);
+        out.value = MAX_NOTE_VALUE + 1;
+        assert!(matches!(out.validate(), Err(PrivacyTxError::InvalidOutputValue(_))));
+    }
+
+    #[test]
+    fn output_short_ciphertext_rejected() {
+        let bob = PrivacyKeyBundle::generate();
+        let note = Note::new(1_000, bob.payment_address.clone());
+        let cm = note.commitment();
+        let enc = EncryptedNote::encrypt(&note, &bob.view_key.public);
+        let mut out = ShieldedOutput::new(cm, enc, 1_000);
+        out.encrypted_note.ciphertext.truncate(10);
+        assert!(matches!(out.validate(), Err(PrivacyTxError::MalformedEncryptedNote)));
+    }
+
+    #[test]
+    fn output_valid_passes_validate() {
+        let bob = PrivacyKeyBundle::generate();
+        let out = make_valid_output(1_000_000, &bob);
+        out.validate().expect("valid output should pass");
+    }
+
+    #[test]
+    fn duplicate_commitment_in_tx_rejected() {
+        let alice = PrivacyKeyBundle::generate();
+        let bob = PrivacyKeyBundle::generate();
+
+        let mut tree = CommitmentTree::new();
+        let input_note = Note::new(20_000_000, alice.payment_address.clone());
+        let cm = input_note.commitment();
+        let idx = tree.append(cm);
+        let anchor = tree.root();
+        let path = tree.auth_path(idx).unwrap();
+
+        let nullifier = input_note.nullifier(&alice.nullifier_key);
+        let spend_proof = SpendProof { note_commitment: cm, merkle_path: path, anchor };
+
+        // Create two outputs with identical commitment (same note, same rcm)
+        let output_note = Note { value: 9_900_000, recipient: bob.payment_address.clone(), rcm: [7u8; 32] };
+        let out_cm = output_note.commitment();
+        let enc1 = EncryptedNote::encrypt(&output_note, &bob.view_key.public);
+        let enc2 = EncryptedNote::encrypt(&output_note, &bob.view_key.public);
+
+        let mut builder = ShieldedTxBuilder::new(anchor, 200_000);
+        builder.add_input(ShieldedInput::new(nullifier, spend_proof, input_note.value));
+        builder.add_output(ShieldedOutput::new(out_cm, enc1, output_note.value));
+        builder.add_output(ShieldedOutput::new(out_cm, enc2, output_note.value));
+
+        // build() only checks balance; validate_stateless() catches duplicates
+        let tx = builder.build().unwrap();
+        assert!(matches!(
+            tx.validate_stateless(),
+            Err(PrivacyTxError::DuplicateCommitment)
+        ));
     }
 
     #[test]

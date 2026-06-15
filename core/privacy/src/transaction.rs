@@ -6,6 +6,19 @@ use crate::commitment_tree::CommitmentTree;
 use crate::note::{EncryptedNote, NoteCommitment, Nullifier};
 use crate::proof::{BalanceProof, BatchedStarkSpendProof, SpendEvidence, SpendProof};
 
+// ── Constants ─────────────────────────────────────────────────────────────────
+
+/// Maximum value a single shielded note may carry (100 M RPC at 10^8 micro/RPC).
+/// Well above any realistic total supply; catches clearly-inflated notes at
+/// broadcast time before they reach the STARK prover or commitment tree.
+pub const MAX_NOTE_VALUE: u64 = 100_000_000 * 100_000_000; // 10^16 micro-RPC
+
+/// Minimum encrypted-note ciphertext length.
+///
+/// NotePlaintext = value(8) + PaymentAddress/Hash(32) + rcm(32) = 72 bytes;
+/// XChaCha20-Poly1305 adds a 16-byte authentication tag → 88 bytes minimum.
+const MIN_CIPHERTEXT_LEN: usize = 88;
+
 // ── Errors ────────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Error)]
@@ -20,6 +33,13 @@ pub enum PrivacyTxError {
     UnknownAnchor,
     #[error("shielded output commitment mismatch")]
     CommitmentMismatch,
+    // Phase 11.5 — output well-formedness
+    #[error("shielded output value invalid: {0}")]
+    InvalidOutputValue(&'static str),
+    #[error("encrypted note ciphertext too short to be valid")]
+    MalformedEncryptedNote,
+    #[error("duplicate note commitment within same transaction")]
+    DuplicateCommitment,
 }
 
 // ── ShieldedInput ─────────────────────────────────────────────────────────────
@@ -101,6 +121,25 @@ impl ShieldedOutput {
             value,
         }
     }
+
+    /// Phase 11.5 — stateless output well-formedness checks.
+    ///
+    /// Validates that the output note is structurally valid without requiring
+    /// the recipient's decryption key.  These are the checks a validating node
+    /// can perform on the plaintext fields it sees (value, commitment length)
+    /// and the minimum-length guard on the ciphertext.
+    pub fn validate(&self) -> Result<(), PrivacyTxError> {
+        if self.value == 0 {
+            return Err(PrivacyTxError::InvalidOutputValue("zero-value notes are not allowed"));
+        }
+        if self.value > MAX_NOTE_VALUE {
+            return Err(PrivacyTxError::InvalidOutputValue("value exceeds protocol cap"));
+        }
+        if self.encrypted_note.ciphertext.len() < MIN_CIPHERTEXT_LEN {
+            return Err(PrivacyTxError::MalformedEncryptedNote);
+        }
+        Ok(())
+    }
 }
 
 // ── PrivacyTransaction ────────────────────────────────────────────────────────
@@ -158,6 +197,16 @@ impl PrivacyTransaction {
         for input in &self.shielded_inputs {
             if !input.verify_spend_proof() {
                 return Err(PrivacyTxError::InvalidSpendProof);
+            }
+        }
+
+        // Phase 11.5 — output well-formedness: value range + ciphertext sanity
+        // + no duplicate commitments within the same transaction.
+        let mut seen = std::collections::HashSet::new();
+        for output in &self.shielded_outputs {
+            output.validate()?;
+            if !seen.insert(output.commitment) {
+                return Err(PrivacyTxError::DuplicateCommitment);
             }
         }
 
