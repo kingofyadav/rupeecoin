@@ -9,7 +9,7 @@ const _prefRpcUrl  = 'rpc_url';
 const _prefChainId = 'chain_id';
 const _defaultRpc  = 'http://127.0.0.1:9944';
 const _defaultChainId = 1337;
-const _microPerCoin = 1_000_000;
+const _microPerCoin = 1000000;
 
 class WalletState extends ChangeNotifier {
   // ── Settings ──────────────────────────────────────────────────────────────
@@ -119,7 +119,7 @@ class WalletState extends ChangeNotifier {
     await refreshBalance();
   }
 
-  void _applyInfo(WalletInfo info, String passphrase) {
+  void _applyInfo(rustApi.WalletInfo info, String passphrase) {
     _address      = info.address;
     _addressHex   = info.addressHex;
     _receiveIndex = info.receiveIndex;
