@@ -11,14 +11,15 @@ use winterfell::{
 use crate::circuit::{SpendCircuit, SpendPublicInputs};
 use crate::hash::compress;
 
-// Witness: private inputs to the spend circuit.
+/// Private witness for one shielded spend.
 pub struct SpendWitness {
-    /// Nullifier key (4 field elements)
     pub nullifier_key: [Felt; 4],
-    /// Note commitment — private, hidden by the STARK proof
     pub note_commitment: [Felt; 4],
-    /// 20 Merkle sibling nodes (one per tree level)
     pub siblings: [[Felt; 4]; 20],
+    /// True at level k when the spending note is the RIGHT child in the Poseidon tree.
+    /// The prover pre-swaps cols 0-3 / 4-7 so compress(cols[0..4], cols[4..8]) always
+    /// yields the correct positional parent: compress(left, right).
+    pub is_right: [bool; 20],
 }
 
 /// Compute nullifier = Poseidon(nk | cm).
@@ -26,20 +27,26 @@ pub fn compute_nullifier(nk: [Felt; 4], cm: [Felt; 4]) -> [Felt; 4] {
     compress(nk, cm)
 }
 
-/// Compute the Merkle root by hashing cm up 20 levels with the given siblings.
-pub fn compute_merkle_root(cm: [Felt; 4], siblings: &[[Felt; 4]; 20]) -> [Felt; 4] {
+/// Compute the Poseidon Merkle root from cm + siblings + direction bits.
+///
+/// Equivalent to `CommitmentTree::root()` for the leaf at the given path.
+pub fn compute_merkle_root(
+    cm: [Felt; 4],
+    siblings: &[[Felt; 4]; 20],
+    is_right: &[bool; 20],
+) -> [Felt; 4] {
     let mut node = cm;
-    for sib in siblings.iter() {
-        node = compress(node, *sib);
+    for (i, sib) in siblings.iter().enumerate() {
+        node = if is_right[i] {
+            compress(*sib, node)   // right child: parent = compress(sibling, node)
+        } else {
+            compress(node, *sib)   // left child:  parent = compress(node, sibling)
+        };
     }
     node
 }
 
-/// Default proof options: blowup=8, quadratic extension, 32 queries → ~96 bits.
-///
-/// `FieldExtension::Quadratic` lifts the Goldilocks field to GF(p^2) ≈ 2^128,
-/// removing the ~63-bit field-size cap on FRI security and letting the
-/// 32 queries × log₂(8) = 96-bit budget reach the 95-bit target.
+/// Default proof options: blowup=8, quadratic extension, 32 queries → ~96 bits security.
 pub fn default_proof_options() -> ProofOptions {
     ProofOptions::new(
         32,
@@ -81,7 +88,7 @@ impl Prover for SpendProver {
         let nk = self.witness.nullifier_key;
         let cm = self.witness.note_commitment;
         let nullifier = compute_nullifier(nk, cm);
-        let anchor = compute_merkle_root(cm, &self.witness.siblings);
+        let anchor = compute_merkle_root(cm, &self.witness.siblings, &self.witness.is_right);
         SpendPublicInputs { nullifier, anchor }
     }
 
@@ -124,13 +131,19 @@ impl Prover for SpendProver {
     }
 }
 
-// Build the 12×256 execution trace from the spend witness.
+/// Build the 12×256 execution trace from the spend witness.
+///
+/// Direction bits (is_right) control the left/right ordering at each Merkle level.
+/// When the spending note is the RIGHT child at level k, the prover pre-swaps the
+/// inputs so that cols[0..4] = sibling and cols[4..8] = node. The Poseidon constraint
+/// then computes `compress(sibling, node)` = the correct positional parent.
 pub fn build_trace(witness: &SpendWitness) -> TraceTable<Felt> {
     let nk = witness.nullifier_key;
     let cm = witness.note_commitment;
     let siblings = witness.siblings;
+    let is_right = witness.is_right;
 
-    // Row 0: [nk | cm | cm_carry], where cm_carry = cm throughout
+    // Row 0: [nk | cm | cm_carry]
     let init_state: [Felt; 12] = [
         nk[0], nk[1], nk[2], nk[3], cm[0], cm[1], cm[2], cm[3], cm[0], cm[1], cm[2], cm[3],
     ];
@@ -143,24 +156,37 @@ pub fn build_trace(witness: &SpendWitness) -> TraceTable<Felt> {
             let round = step % 8;
 
             if round < 7 {
-                // Constrained row: apply Poseidon round to cols 0-7
                 crate::hash::poseidon_round(&mut state[..8], round);
-                // cols 8-11 (cm-carry) untouched
             } else {
-                // Free injection row: set up the NEXT hash's input
                 if hash_idx == 0 {
-                    // After nullifier hash: Merkle path starts with [cm, sib0]
-                    state[..4].copy_from_slice(&cm);
-                    state[4..8].copy_from_slice(&siblings[0]);
-                    // cols 8-11 unchanged (remain cm)
+                    // After nullifier hash: set up Merkle level 0 input.
+                    // If cm is the RIGHT child, put sibling on the left (cols 0-3)
+                    // and cm on the right (cols 4-7) so compress(sib, cm) = correct parent.
+                    if is_right[0] {
+                        state[..4].copy_from_slice(&siblings[0]);
+                        state[4..8].copy_from_slice(&cm);
+                    } else {
+                        state[..4].copy_from_slice(&cm);
+                        state[4..8].copy_from_slice(&siblings[0]);
+                    }
                 } else if hash_idx < 20 {
-                    // After Merkle hash k: cols 0-3 already = running node
-                    state[4..8].copy_from_slice(&siblings[hash_idx]);
-                    // cols 8-11 unchanged (remain cm)
+                    // After Merkle hash k: the hash output is in cols 0-3.
+                    // Set up next sibling; if node is a RIGHT child at level hash_idx,
+                    // swap so sibling goes left and the running node goes right.
+                    // The chaining constraint carries current[0..4] to next[0..4] OR
+                    // next[4..8] (weakened product constraint), so we must also move
+                    // the running node to cols 4-7 here when swapping.
+                    if is_right[hash_idx] {
+                        // running node was in cols 0-3 (hash output); move it to 4-7
+                        // and put the sibling in 0-3.
+                        let running = [state[0], state[1], state[2], state[3]];
+                        state[..4].copy_from_slice(&siblings[hash_idx]);
+                        state[4..8].copy_from_slice(&running);
+                    } else {
+                        state[4..8].copy_from_slice(&siblings[hash_idx]);
+                        // cols 0-3 already hold running node (carried by constraint)
+                    }
                 } else {
-                    // Rows 168+: zero the Poseidon state (cols 0-7) but leave
-                    // cm-carry (cols 8-11) unchanged — the copy constraint fires
-                    // at every step and requires cols 8-11 to be constant.
                     state[..8].fill(Felt::ZERO);
                 }
             }

@@ -1,34 +1,36 @@
-use rupeecoin_crypto::{hash_concat, hash_data, Hash};
+use rupeecoin_crypto::Hash;
+use rupeecoin_zkproof::poseidon_compress_bytes;
 use serde::{Deserialize, Serialize};
 
 use crate::note::NoteCommitment;
 
-/// Tree depth: can hold up to 2^DEPTH = 2^32 ≈ 4 billion notes.
-pub const TREE_DEPTH: usize = 32;
+/// Depth matches the STARK circuit's 20-level Merkle path.
+/// Supports up to 2^20 ≈ 1M note commitments.
+pub const TREE_DEPTH: usize = 20;
 
-/// Precomputed empty-node hashes at each level.
-/// `EMPTY[0]` = hash of an empty leaf.
-/// `EMPTY[l]` = hash of two empty nodes at level `l-1`.
 static EMPTY: std::sync::OnceLock<[Hash; TREE_DEPTH + 1]> = std::sync::OnceLock::new();
 
 fn empty_hashes() -> &'static [Hash; TREE_DEPTH + 1] {
     EMPTY.get_or_init(|| {
         let mut e = [Hash::zero(); TREE_DEPTH + 1];
-        e[0] = hash_data(b"RUPEECOIN_EMPTY_LEAF_v1");
+        e[0] = Hash::from_bytes(*b"RUPEECOIN_POSEIDON_EMPTY_LEAF_v2");
         for i in 1..=TREE_DEPTH {
-            e[i] = hash_concat(&e[i - 1], &e[i - 1]);
+            e[i] = Hash::from_bytes(poseidon_compress_bytes(
+                e[i - 1].as_bytes(),
+                e[i - 1].as_bytes(),
+            ));
         }
         e
     })
 }
 
-/// Sparse incremental Merkle tree backed by a flat list of note commitments.
+/// Incremental Merkle commitment tree using Poseidon compression.
 ///
-/// The tree is rebuilt from its leaf list on load.  For Phase 4 this is
-/// acceptable; a production system would persist the frontier.
+/// Parent = Poseidon(left_child, right_child) — standard positional binary tree.
+/// The STARK circuit uses direction bits (is_right) from the auth_path to
+/// compute the same root, so on-chain anchor and STARK anchor are identical.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct CommitmentTree {
-    /// All note commitments in insertion order (leaves, left-to-right).
     pub leaves: Vec<NoteCommitment>,
 }
 
@@ -41,20 +43,18 @@ impl CommitmentTree {
         self.leaves.len()
     }
 
-    /// Append a new note commitment and return its leaf index.
     pub fn append(&mut self, cm: NoteCommitment) -> usize {
         let idx = self.leaves.len();
         self.leaves.push(cm);
         idx
     }
 
-    /// Compute the Merkle root of the current tree state.
+    /// Compute the Poseidon Merkle root.
     pub fn root(&self) -> Hash {
         if self.leaves.is_empty() {
             return empty_hashes()[TREE_DEPTH];
         }
 
-        // Build the tree bottom-up.
         let mut layer: Vec<Hash> = self.leaves.iter().map(|cm| cm.0).collect();
 
         for level in 0..TREE_DEPTH {
@@ -63,12 +63,11 @@ impl CommitmentTree {
             let mut i = 0;
             while i < layer.len() {
                 let left = layer[i];
-                let right = if i + 1 < layer.len() {
-                    layer[i + 1]
-                } else {
-                    empty
-                };
-                next.push(hash_concat(&left, &right));
+                let right = if i + 1 < layer.len() { layer[i + 1] } else { empty };
+                next.push(Hash::from_bytes(poseidon_compress_bytes(
+                    left.as_bytes(),
+                    right.as_bytes(),
+                )));
                 i += 2;
             }
             layer = next;
@@ -77,7 +76,10 @@ impl CommitmentTree {
         layer[0]
     }
 
-    /// Generate a Merkle authentication path for leaf at `index`.
+    /// Return the 20 Poseidon siblings and direction bits for the STARK circuit.
+    ///
+    /// `is_right = true` means the leaf/running-node is the right child at that level,
+    /// so the STARK trace should use `compress(sibling, node)` instead of `compress(node, sibling)`.
     pub fn auth_path(&self, index: usize) -> Option<MerklePath> {
         if index >= self.leaves.len() {
             return None;
@@ -89,25 +91,21 @@ impl CommitmentTree {
 
         for level in 0..TREE_DEPTH {
             let empty = empty_hashes()[level];
-            let sibling_idx = if idx % 2 == 0 { idx + 1 } else { idx - 1 };
-            let sibling = if sibling_idx < layer.len() {
-                layer[sibling_idx]
-            } else {
-                empty
-            };
-            let is_right = idx % 2 == 1; // true when we're the right child
+            let is_right = idx % 2 == 1;
+            let sibling_idx = idx ^ 1;
+            let sibling =
+                if sibling_idx < layer.len() { layer[sibling_idx] } else { empty };
             path.push((sibling, is_right));
 
             let mut next = Vec::with_capacity((layer.len() + 1) / 2);
             let mut i = 0;
             while i < layer.len() {
                 let left = layer[i];
-                let right = if i + 1 < layer.len() {
-                    layer[i + 1]
-                } else {
-                    empty
-                };
-                next.push(hash_concat(&left, &right));
+                let right = if i + 1 < layer.len() { layer[i + 1] } else { empty };
+                next.push(Hash::from_bytes(poseidon_compress_bytes(
+                    left.as_bytes(),
+                    right.as_bytes(),
+                )));
                 i += 2;
             }
             layer = next;
@@ -124,24 +122,24 @@ impl Default for CommitmentTree {
     }
 }
 
-// ── Merkle path ──────────────────────────────────────────────────────────────
-
-/// An authentication path from a leaf to the tree root.
-/// Each element is `(sibling_hash, is_right_child)`.
+/// Merkle authentication path: 20 (sibling_hash, is_right_child) pairs.
+///
+/// `is_right_child = true` means the spending note is the RIGHT child at that level,
+/// so the parent = Poseidon(sibling, note).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MerklePath {
     pub path: Vec<(Hash, bool)>,
 }
 
 impl MerklePath {
-    /// Recompute the root from a leaf commitment and this path.
+    /// Recompute the root using positional Poseidon: `compress(left, right)`.
     pub fn compute_root(&self, leaf: Hash) -> Hash {
         let mut cur = leaf;
-        for &(sibling, is_right) in &self.path {
+        for &(sib, is_right) in &self.path {
             cur = if is_right {
-                hash_concat(&sibling, &cur)
+                Hash::from_bytes(poseidon_compress_bytes(sib.as_bytes(), cur.as_bytes()))
             } else {
-                hash_concat(&cur, &sibling)
+                Hash::from_bytes(poseidon_compress_bytes(cur.as_bytes(), sib.as_bytes()))
             };
         }
         cur

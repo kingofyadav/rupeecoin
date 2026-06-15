@@ -190,17 +190,19 @@ impl SpendEvidence {
     }
 
     /// The anchor embedded in the spend evidence.
+    ///
+    /// For `Stark` proofs, the anchor is the Poseidon commitment tree root
+    /// stored as 4 little-endian u64 field elements packed into 32 bytes.
+    /// This matches the value returned by `CommitmentTree::root()` exactly.
     pub fn anchor(&self) -> Hash {
         match self {
             SpendEvidence::Blake3Path(sp) => sp.anchor,
             SpendEvidence::Stark(sp) => {
-                // Re-derive a BLAKE3 hash from the Goldilocks anchor for
-                // compatibility with the chain's Hash type.
                 let mut buf = [0u8; 32];
                 for (i, &v) in sp.anchor_felts.iter().enumerate() {
                     buf[i * 8..(i + 1) * 8].copy_from_slice(&v.to_le_bytes());
                 }
-                rupeecoin_crypto::hash_data(&buf)
+                Hash::from_bytes(buf)
             }
         }
     }

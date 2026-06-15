@@ -101,7 +101,7 @@ struct ShieldedOutputItem {
 
 #[derive(Serialize)]
 struct MerklePathResp {
-    /// Each element: [sibling_hex, is_right_child]
+    /// Each element: (sibling_hex, is_right_child).
     path: Vec<(String, bool)>,
     anchor: String,
 }
