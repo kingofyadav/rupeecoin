@@ -1,6 +1,6 @@
 [package]
 name    = "rupeecoin-sdk"
-version = "0.3.0"
+version = "1.0.0"
 edition = "2021"
 description = "RupeeCoin Rust SDK v0.1 — key generation, transaction construction, RPC client"
 license = "MIT"

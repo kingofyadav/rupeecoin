@@ -4,7 +4,7 @@
 
 [package]
 name = "rupeecoin-desktop-wallet"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2021"
 description = "RupeeCoin desktop wallet — Tauri 2 GUI wrapping the RupeeCoin core"
 

@@ -1,3 +1,5 @@
+mod hw_wallet;
+use hw_wallet::HardwareWallet as _;
 mod keystore;
 mod node_rpc;
 mod scanner;
@@ -54,6 +56,11 @@ enum Command {
         amount: f64,
         #[arg(long, default_value = "0.001")]
         fee: f64,
+        /// Sign with a hardware wallet (Mock in Phase 13; Ledger/Trezor in Phase 14).
+        /// Requires --keys to contain an HD master seed whose public key matches
+        /// the hardware device at m/HD_RECEIVE/<receive-index>.
+        #[arg(long)]
+        hardware_wallet: bool,
     },
     /// Show claimable validator rewards (claimed automatically by the node when proposing).
     Claim {
@@ -99,7 +106,9 @@ fn run(cli: Cli) -> anyhow::Result<()> {
         Command::Address => cmd_address(&cli.keys),
         Command::Receive => cmd_receive(&cli.keys),
         Command::Scan { rpc } => cmd_scan(&cli.keys, &rpc),
-        Command::Send { rpc, to, amount, fee } => cmd_send(&cli.keys, &rpc, &to, amount, fee),
+        Command::Send { rpc, to, amount, fee, hardware_wallet } => {
+            cmd_send(&cli.keys, &rpc, &to, amount, fee, hardware_wallet)
+        }
         Command::Claim { rpc } => cmd_claim(&cli.keys, &rpc),
         Command::SignTx { rpc, to, amount, chain_id, expiry } => {
             cmd_sign_tx(&cli.keys, &rpc, &to, amount, chain_id, expiry)
@@ -218,9 +227,20 @@ fn cmd_send(
     to_addr_input: &str,
     amount_rpc: f64,
     fee_rpc: f64,
+    use_hardware_wallet: bool,
 ) -> anyhow::Result<()> {
     let ks = keystore::load(keys_path)?;
     let rpc = NodeRpc::new(rpc_url);
+
+    if use_hardware_wallet {
+        if let Some(ref seed) = ks.hd_master_seed {
+            let hw = hw_wallet::MockHardwareWallet::new(seed);
+            println!("Hardware wallet: {}", hw.device_info());
+            println!("  (Phase 14 will add real Ledger/Trezor support via USB-HID)");
+        } else {
+            anyhow::bail!("--hardware-wallet requires a wallet with an HD master seed; regenerate the wallet");
+        }
+    }
 
     let amount_micro = (amount_rpc * MICRO_RPC_PER_COIN as f64) as u64;
     let fee_micro = (fee_rpc * MICRO_RPC_PER_COIN as f64) as u64;

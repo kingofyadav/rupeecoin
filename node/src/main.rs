@@ -1,4 +1,5 @@
 mod rpc;
+mod tor;
 
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -22,7 +23,7 @@ use rupeecoin_blockchain::ANCHOR_DEPTH;
 use rupeecoin_privacy::{PrivacyBlockApply, PrivacyTransaction};
 use rupeecoin_staking::{ValidatorRegistry, MIN_STAKE_MICRO_RPC};
 use rupeecoin_storage::ChainStore;
-use rupeecoin_types::{Attestation, Block, ValidatorAnnouncement, MICRO_RPC_PER_COIN};
+use rupeecoin_types::{Attestation, Block, GenesisConfig, ValidatorAnnouncement, MICRO_RPC_PER_COIN};
 
 // ── CLI ───────────────────────────────────────────────────────────────────────
 
@@ -39,6 +40,10 @@ struct Config {
     /// When set, the validator keypair is derived reproducibly so that
     /// coinbase UTXOs can be spent by external tools (e.g. fund_faucet).
     validator_seed: Option<[u8; 32]>,
+    /// Phase 13.3: optional Tor SOCKS5 proxy (host:port).
+    tor: Option<tor::TorConfig>,
+    /// Phase 13.2: optional custom genesis config loaded from a JSON file.
+    genesis_config: Option<GenesisConfig>,
 }
 
 fn parse_args() -> Result<Config> {
@@ -50,6 +55,8 @@ fn parse_args() -> Result<Config> {
     let mut rpc_port: u16 = 9944;
     let mut trusted_checkpoint: Option<WeakSubjectivityCheckpoint> = None;
     let mut validator_seed: Option<[u8; 32]> = None;
+    let mut tor_config: Option<tor::TorConfig> = None;
+    let mut genesis_config: Option<GenesisConfig> = None;
 
     let mut args = std::env::args().skip(1);
     while let Some(flag) = args.next() {
@@ -109,6 +116,22 @@ fn parse_args() -> Result<Config> {
                         .map_err(|_| anyhow::anyhow!("--validator-seed must be exactly 32 bytes (64 hex chars)"))?,
                 );
             }
+            "--tor-socks" => {
+                let addr = args.next().context("--tor-socks requires host:port")?;
+                tor_config = Some(
+                    tor::TorConfig::parse(&addr)
+                        .map_err(|e| anyhow::anyhow!("{e}"))?,
+                );
+            }
+            "--genesis-config" => {
+                let path = args.next().context("--genesis-config requires a file path")?;
+                let json = std::fs::read_to_string(&path)
+                    .with_context(|| format!("reading genesis config from '{path}'"))?;
+                let cfg = GenesisConfig::from_json(&json)
+                    .with_context(|| format!("parsing genesis config from '{path}'"))?;
+                cfg.validate().map_err(|e| anyhow::anyhow!("invalid genesis config: {e}"))?;
+                genesis_config = Some(cfg);
+            }
             "--help" | "-h" => {
                 println!(
                     "rupeecoin-node\n\
@@ -123,8 +146,11 @@ fn parse_args() -> Result<Config> {
                      --no-rpc                                disable HTTP RPC\n\
                      --checkpoint <height:hash:state_root>   bootstrap checkpoint (skip validation before height)\n\
                      --validator-seed <hex>                  32-byte seed for deterministic validator keypair\n\
+                     --tor-socks <host:port>                 route outgoing P2P connections through Tor SOCKS5 proxy\n\
+                     --genesis-config <path>                 load genesis parameters from JSON file (overrides built-in mainnet config)\n\
                      \n\
-                     Example: --stake 10000 --checkpoint 604800:<hash_hex>:<state_hex>"
+                     Example: --stake 10000 --checkpoint 604800:<hash_hex>:<state_hex>\n\
+                     Tor example: --tor-socks 127.0.0.1:9050 --peer /dns4/xyz.onion/tcp/30333"
                 );
                 std::process::exit(0);
             }
@@ -144,6 +170,8 @@ fn parse_args() -> Result<Config> {
         rpc_port,
         trusted_checkpoint,
         validator_seed,
+        tor: tor_config,
+        genesis_config,
     })
 }
 
@@ -434,6 +462,29 @@ async fn main() -> Result<()> {
         });
         let port = cfg.rpc_port;
         tokio::spawn(async move { rpc::serve(rpc_state, port).await });
+    }
+
+    // ── Phase 13.3: Tor / SOCKS5 ─────────────────────────────────────────────
+    if let Some(ref tor_cfg) = cfg.tor {
+        info!("Tor mode enabled — SOCKS5 proxy at {}", tor_cfg.proxy_addr);
+        match tor::check_proxy_reachability(tor_cfg.proxy_addr).await {
+            Ok(()) => info!("Tor SOCKS5 proxy is reachable and responding"),
+            Err(e) => warn!("{e}  (proceeding without Tor — check that Tor is running)"),
+        }
+    }
+
+    // ── Phase 13.2: Genesis config ────────────────────────────────────────────
+    if let Some(ref gen_cfg) = cfg.genesis_config {
+        info!(
+            "Custom genesis config loaded: chain_id={} network={}",
+            gen_cfg.chain_id, gen_cfg.network_name
+        );
+    } else {
+        let default_gen = GenesisConfig::mainnet();
+        info!(
+            "Using built-in genesis config: chain_id={} network={}",
+            default_gen.chain_id, default_gen.network_name
+        );
     }
 
     info!("Starting P2P network on {}", cfg.listen);

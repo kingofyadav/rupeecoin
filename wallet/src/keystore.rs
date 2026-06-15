@@ -25,7 +25,9 @@ const ARGON2_MEM_KIB: u32 = 65_536;
 const ARGON2_ITERS: u32 = 3;
 const ARGON2_LANES: u32 = 1;
 const ARGON2_OUT_LEN: usize = 32;
-const KEYSTORE_AD: &[u8] = b"rupeecoin-keystore-v2"; // same AD for v2 and v3
+// AD is intentionally the same for v2 and v3: changing it would invalidate
+// all existing v3 keystores.  New file versions must keep this value forever.
+const KEYSTORE_AD: &[u8] = b"rupeecoin-keystore-v2";
 
 // ── Errors ─────────────────────────────────────────────────────────────────────
 
