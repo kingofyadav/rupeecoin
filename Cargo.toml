@@ -13,6 +13,7 @@ members = [
     "core/privacy",
     "core/zkproof",
     "core/economics",
+    "core/rvm",
     "node",
     "wallet",
     "explorer",
@@ -20,6 +21,7 @@ members = [
     "faucet",
     "rupeecoin-sdk",
     "rupeecoin-tests",
+    "evm2rvm",
 ]
 
 [workspace.dependencies]
