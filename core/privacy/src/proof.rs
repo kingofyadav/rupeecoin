@@ -154,29 +154,37 @@ pub struct StarkSpendProof {
     pub nullifier_felts: [u64; 4],
 }
 
-// ── Spend evidence (Phase 4 / Phase 5B union) ─────────────────────────────────
+// ── Batched STARK spend proof (Phase 11.2) ───────────────────────────────────
 
-/// The two forms of spend evidence supported by the protocol.
+/// Re-exported from `rupeecoin-zkproof`.  One proof covers up to 10 shielded
+/// inputs.  The proof lives at the transaction level; individual
+/// `ShieldedInput.spend_evidence` fields are set to `SpendEvidence::BatchedStark`.
+pub use rupeecoin_zkproof::BatchedStarkSpendProof;
+
+// ── Spend evidence (Phase 4 / Phase 5B / Phase 11.2 union) ───────────────────
+
+/// The spend evidence variants supported by the protocol.
 ///
 /// `Blake3Path` is the Phase 4 Merkle-path proof (linkable but simple).
-/// `Stark` is the Phase 5B Winterfell STARK proof (fully zero-knowledge).
-///
-/// Validators should accept both during the transition period; once the
-/// network has fully migrated, `Blake3Path` can be retired.
+/// `Stark` is the Phase 5B per-input Winterfell STARK proof.
+/// `BatchedStark` marks an input whose proof is aggregated at the transaction
+/// level in `PrivacyTransaction::batch_stark_proof`; no proof data is stored
+/// per-input.  The transaction-level verifier checks all inputs at once.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SpendEvidence {
     /// Phase 4 linkable spend proof — reveals note commitment.
     Blake3Path(SpendProof),
     /// Phase 5B zk-STARK spend proof — hides note commitment entirely.
     Stark(StarkSpendProof),
+    /// Phase 11.2 batch marker — proof is in `PrivacyTransaction::batch_stark_proof`.
+    BatchedStark,
 }
 
 impl SpendEvidence {
-    /// Verify the spend evidence (stateless check only).
+    /// Stateless per-input verification.
     ///
-    /// For `Blake3Path` this recomputes the Merkle root.
-    /// For `Stark` this calls the real Winterfell verifier — a forged or
-    /// corrupted proof will return `false` here.
+    /// `BatchedStark` inputs always return `true` here; the real check is done
+    /// at the transaction level in `PrivacyTransaction::verify_batch_stark`.
     pub fn verify_basic(&self) -> bool {
         match self {
             SpendEvidence::Blake3Path(sp) => sp.verify(),
@@ -186,14 +194,15 @@ impl SpendEvidence {
                 sp.nullifier_felts,
             )
             .is_ok(),
+            SpendEvidence::BatchedStark => true,
         }
     }
 
     /// The anchor embedded in the spend evidence.
     ///
-    /// For `Stark` proofs, the anchor is the Poseidon commitment tree root
-    /// stored as 4 little-endian u64 field elements packed into 32 bytes.
-    /// This matches the value returned by `CommitmentTree::root()` exactly.
+    /// For `Stark` the anchor is the Poseidon root packed as 4 LE u64 → 32 bytes.
+    /// For `BatchedStark` returns `Hash::default()`; the shared anchor is in
+    /// `PrivacyTransaction::batch_stark_proof`.
     pub fn anchor(&self) -> Hash {
         match self {
             SpendEvidence::Blake3Path(sp) => sp.anchor,
@@ -204,6 +213,7 @@ impl SpendEvidence {
                 }
                 Hash::from_bytes(buf)
             }
+            SpendEvidence::BatchedStark => Hash::from_bytes([0u8; 32]),
         }
     }
 }

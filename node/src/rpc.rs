@@ -248,7 +248,7 @@ async fn submit_privacy_tx(
         .map_err(|e| RpcError(e.to_string()))?;
     drop(snap);
 
-    // Verify any STARK spend proofs with the real Winterfell verifier.
+    // Verify individual per-input STARK spend proofs.
     for input in &tx.shielded_inputs {
         if let SpendEvidence::Stark(sp) = &input.spend_evidence {
             let zk = rupeecoin_zkproof::StarkSpendProof {
@@ -258,6 +258,31 @@ async fn submit_privacy_tx(
             rupeecoin_zkproof::verify_spend(&zk, sp.nullifier_felts)
                 .map_err(|e| RpcError(format!("STARK proof invalid: {e}")))?;
         }
+    }
+
+    // Verify the transaction-level batch STARK proof (Phase 11.2).
+    //
+    // The batch proof carries its own nullifier felts (public inputs pinned at
+    // row 7 of each 256-row block).  The STARK verifier checks the proof is
+    // consistent with exactly those values, so a wallet that tampers with
+    // nullifier_felts receives a verification failure.
+    if let Some(batch_proof) = &tx.batch_stark_proof {
+        let batched_count = tx
+            .shielded_inputs
+            .iter()
+            .filter(|i| matches!(i.spend_evidence, SpendEvidence::BatchedStark))
+            .count();
+
+        if batched_count != batch_proof.num_spends as usize {
+            return Err(RpcError(format!(
+                "batch STARK proof covers {} inputs but tx has {} BatchedStark inputs",
+                batch_proof.num_spends,
+                batched_count
+            )));
+        }
+
+        rupeecoin_zkproof::verify_spend_batch(batch_proof)
+            .map_err(|e| RpcError(format!("batch STARK proof invalid: {e}")))?;
     }
 
     state.pending_privacy_txs.lock().unwrap().push(tx);

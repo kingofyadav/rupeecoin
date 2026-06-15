@@ -10,7 +10,9 @@ pub use keys::{
     ViewPublicKey, ViewSecretKey,
 };
 pub use note::{EncryptedNote, Note, NoteCommitment, Nullifier};
-pub use proof::{BalanceProof, RangeProof, SpendEvidence, SpendProof, StarkSpendProof};
+pub use proof::{
+    BalanceProof, BatchedStarkSpendProof, RangeProof, SpendEvidence, SpendProof, StarkSpendProof,
+};
 pub use transaction::{
     PrivacyBlockApply, PrivacyTransaction, PrivacyTxError, ShieldedInput, ShieldedOutput,
     ShieldedTxBuilder,
