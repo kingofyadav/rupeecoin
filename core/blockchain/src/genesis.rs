@@ -6,6 +6,10 @@ use rupeecoin_types::{
 use rupeecoin_utxo::UtxoSet;
 
 pub fn genesis_block() -> Block {
+    genesis_block_with_timestamp(1_700_000_000)
+}
+
+pub fn genesis_block_with_timestamp(timestamp: u64) -> Block {
     let coinbase = Transaction {
         version: 1,
         chain_id: MAINNET_CHAIN_ID,
@@ -31,7 +35,7 @@ pub fn genesis_block() -> Block {
             version: 1,
             prev_hash: Hash::zero(),
             merkle_root: mr,
-            timestamp: 1_700_000_000,
+            timestamp,
             height: 0,
             slot: 0,
             proposer_index: 0,

@@ -1,17 +1,20 @@
 mod dandelion;
+pub mod socks;
 
 use std::collections::{HashMap, HashSet};
 use std::io;
-use std::time::Duration;
+use std::net::SocketAddr;
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use futures::{prelude::*, StreamExt};
 use libp2p::{
+    core::{muxing::StreamMuxerBox, upgrade},
     gossipsub::{self, IdentTopic, MessageAuthenticity, ValidationMode},
     identify, mdns, noise, ping,
     request_response::{self, InboundRequestId, ProtocolSupport, ResponseChannel},
     swarm::{NetworkBehaviour, SwarmEvent},
-    tcp, yamux, Multiaddr, PeerId, StreamProtocol,
+    tcp, yamux, Multiaddr, PeerId, StreamProtocol, Transport,
 };
 use rand::rngs::SmallRng;
 use rand::SeedableRng;
@@ -23,6 +26,38 @@ use tracing::{debug, info, trace, warn};
 use rupeecoin_types::{Attestation, Block, Transaction, ValidatorAnnouncement};
 
 use dandelion::{pick_stem_peer, DandelionRouter, DandelionStemAck, DandelionStemReq, StemCodec};
+
+// ── Gossipsub rate limiting ───────────────────────────────────────────────────
+
+/// Maximum gossipsub messages accepted from a single peer per window.
+const RATE_LIMIT_MAX: u32 = 100;
+/// Window duration in seconds for per-peer rate limiting.
+const RATE_LIMIT_WINDOW_SECS: u64 = 10;
+
+/// Returns true if `peer` is permitted to send messages.
+/// When `allowlist` is `None` (no allowlist configured) all peers are allowed.
+fn is_allowlisted(allowlist: Option<&HashSet<PeerId>>, peer: &PeerId) -> bool {
+    match allowlist {
+        None => true,
+        Some(list) => list.contains(peer),
+    }
+}
+
+/// Returns true if the peer has exceeded its rate limit, false if the message
+/// should be processed.  Resets the counter when the window expires.
+fn is_rate_limited(
+    peer_rate: &mut HashMap<PeerId, (u32, Instant)>,
+    peer: &PeerId,
+) -> bool {
+    let now = Instant::now();
+    let entry = peer_rate.entry(*peer).or_insert((0, now));
+    if now.duration_since(entry.1).as_secs() >= RATE_LIMIT_WINDOW_SECS {
+        *entry = (1, now);
+        return false;
+    }
+    entry.0 += 1;
+    entry.0 > RATE_LIMIT_MAX
+}
 
 // ── Gossipsub topics ─────────────────────────────────────────────────────────
 
@@ -174,6 +209,8 @@ struct RupeeCoinBehaviour {
 
 pub fn start(
     listen_addr: Multiaddr,
+    tor_proxy: Option<SocketAddr>,
+    allowlist: Option<HashSet<PeerId>>,
 ) -> anyhow::Result<(mpsc::Sender<NetworkCommand>, mpsc::Receiver<NetworkEvent>)> {
     let (cmd_tx, cmd_rx) = mpsc::channel::<NetworkCommand>(64);
     let (event_tx, event_rx) = mpsc::channel::<NetworkEvent>(256);
@@ -191,14 +228,34 @@ pub fn start(
     let sync_proto = StreamProtocol::new("/rupeecoin/sync/1");
     let stem_proto = StreamProtocol::new("/rupeecoin/dandelion/1");
 
-    let mut swarm = libp2p::SwarmBuilder::with_new_identity()
+    let swarm_builder = libp2p::SwarmBuilder::with_new_identity()
         .with_tokio()
         .with_tcp(
             tcp::Config::default(),
             noise::Config::new,
             yamux::Config::default,
-        )?
-        .with_behaviour(|key| {
+        )?;
+
+    // 14.7: Wire SOCKS5 transport for Tor support.  When tor_proxy is None the
+    // SocksTransport always returns MultiaddrNotSupported so it is transparent.
+    if tor_proxy.is_some() {
+        tracing::info!("Tor SOCKS5 proxy enabled: {:?}", tor_proxy);
+    }
+    let swarm_builder = swarm_builder
+        .with_other_transport(|keypair| -> Result<_, Box<dyn std::error::Error + Send + Sync>> {
+            let socks = socks::SocksTransport::from_option(tor_proxy);
+            Ok(socks
+                .upgrade(upgrade::Version::V1)
+                .authenticate(
+                    noise::Config::new(keypair)
+                        .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?,
+                )
+                .multiplex(yamux::Config::default())
+                .map(|(peer_id, muxer), _| (peer_id, StreamMuxerBox::new(muxer)))
+                .boxed())
+        })?;
+
+    let mut swarm = swarm_builder.with_behaviour(|key| {
             let gs_cfg = gossipsub::ConfigBuilder::default()
                 .heartbeat_interval(Duration::from_millis(700))
                 .validation_mode(ValidationMode::Strict)
@@ -252,7 +309,7 @@ pub fn start(
         .subscribe(&attestation_topic)?;
     swarm.listen_on(listen_addr)?;
 
-    tokio::spawn(run(swarm, cmd_rx, event_tx, bt, tt, vt, at));
+    tokio::spawn(run(swarm, cmd_rx, event_tx, bt, tt, vt, at, allowlist));
 
     Ok((cmd_tx, event_rx))
 }
@@ -267,11 +324,14 @@ async fn run(
     tx_topic: IdentTopic,
     validator_topic: IdentTopic,
     attestation_topic: IdentTopic,
+    allowlist: Option<HashSet<PeerId>>,
 ) {
     let mut pending_sync: HashMap<SyncRequestId, ResponseChannel<SyncResponse>> = HashMap::new();
     let mut connected_peers: HashSet<PeerId> = HashSet::new();
     let mut dandelion = DandelionRouter::new();
     let mut rng = SmallRng::from_entropy();
+    // Per-peer gossipsub rate limiting: (message_count, window_start).
+    let mut peer_rate: HashMap<PeerId, (u32, Instant)> = HashMap::new();
     // Tick every second to flush stem transactions whose timeout has elapsed.
     let mut stem_timer = time::interval(Duration::from_secs(1));
 
@@ -285,6 +345,8 @@ async fn run(
                     &mut connected_peers,
                     &mut dandelion,
                     &mut rng,
+                    &mut peer_rate,
+                    allowlist.as_ref(),
                 ).await;
             }
             Some(cmd) = cmd_rx.recv() => {
@@ -329,6 +391,8 @@ async fn on_event(
     connected_peers: &mut HashSet<PeerId>,
     dandelion: &mut DandelionRouter,
     rng: &mut SmallRng,
+    peer_rate: &mut HashMap<PeerId, (u32, Instant)>,
+    allowlist: Option<&HashSet<PeerId>>,
 ) {
     match event {
         // ── Gossipsub ──────────────────────────────────────────────────────────
@@ -336,6 +400,18 @@ async fn on_event(
             message,
             ..
         })) => {
+            // N-04: allowlist filter, then rate-limit per message source.
+            if let Some(src) = message.source {
+                if !is_allowlisted(allowlist, &src) {
+                    trace!("gossipsub: dropping message from non-allowlisted peer {src}");
+                    return;
+                }
+                if is_rate_limited(peer_rate, &src) {
+                    warn!("gossipsub: rate limit exceeded for {src} — dropping message");
+                    return;
+                }
+            }
+
             if message.topic == block_topic.hash() {
                 match bincode::deserialize::<Block>(&message.data) {
                     Ok(block) => {
@@ -632,5 +708,100 @@ fn on_cmd(
                 },
             );
         }
+    }
+}
+
+// ── Allowlist tests ───────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod allowlist_tests {
+    use super::*;
+
+    #[test]
+    fn no_allowlist_accepts_all() {
+        let peer = PeerId::random();
+        assert!(is_allowlisted(None, &peer));
+    }
+
+    #[test]
+    fn allowlist_accepts_listed_peer() {
+        let peer = PeerId::random();
+        let mut set = HashSet::new();
+        set.insert(peer);
+        assert!(is_allowlisted(Some(&set), &peer));
+    }
+
+    #[test]
+    fn allowlist_blocks_unlisted_peer() {
+        let peer_a = PeerId::random();
+        let peer_b = PeerId::random();
+        let mut set = HashSet::new();
+        set.insert(peer_a);
+        assert!(!is_allowlisted(Some(&set), &peer_b));
+    }
+
+    #[test]
+    fn empty_allowlist_blocks_all() {
+        let peer = PeerId::random();
+        let set: HashSet<PeerId> = HashSet::new();
+        assert!(!is_allowlisted(Some(&set), &peer));
+    }
+}
+
+// ── Rate limiter tests ────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod rate_limit_tests {
+    use super::*;
+
+    #[test]
+    fn under_limit_passes() {
+        let mut map: HashMap<PeerId, (u32, Instant)> = HashMap::new();
+        let peer = PeerId::random();
+        for _ in 0..RATE_LIMIT_MAX {
+            assert!(!is_rate_limited(&mut map, &peer));
+        }
+    }
+
+    #[test]
+    fn over_limit_blocked() {
+        let mut map: HashMap<PeerId, (u32, Instant)> = HashMap::new();
+        let peer = PeerId::random();
+        // Exhaust the window.
+        for _ in 0..RATE_LIMIT_MAX {
+            is_rate_limited(&mut map, &peer);
+        }
+        // Next message exceeds the limit.
+        assert!(is_rate_limited(&mut map, &peer));
+    }
+
+    #[test]
+    fn different_peers_are_independent() {
+        let mut map: HashMap<PeerId, (u32, Instant)> = HashMap::new();
+        let peer_a = PeerId::random();
+        let peer_b = PeerId::random();
+        for _ in 0..RATE_LIMIT_MAX {
+            is_rate_limited(&mut map, &peer_a);
+        }
+        // peer_b hasn't sent anything — should not be limited.
+        assert!(!is_rate_limited(&mut map, &peer_b));
+    }
+
+    #[test]
+    fn window_reset_allows_new_messages() {
+        let mut map: HashMap<PeerId, (u32, Instant)> = HashMap::new();
+        let peer = PeerId::random();
+        // Fill up and exceed.
+        for _ in 0..=RATE_LIMIT_MAX {
+            is_rate_limited(&mut map, &peer);
+        }
+        // Manually expire the window by back-dating the entry.
+        if let Some(entry) = map.get_mut(&peer) {
+            entry.1 = Instant::now()
+                .checked_sub(Duration::from_secs(RATE_LIMIT_WINDOW_SECS + 1))
+                .unwrap_or(Instant::now());
+        }
+        // Should pass now (window reset).
+        assert!(!is_rate_limited(&mut map, &peer));
     }
 }

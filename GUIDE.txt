@@ -1,7 +1,7 @@
 ================================================================================
   RUPEECOIN — DEVELOPER & USER GUIDE
   Complete reference for CLI tools, RPC API, SDK, and protocol constants
-  Build: Phases 0–10.2 complete  |  Test suite: 86 tests + 4 bench groups, 0 failures
+  Build: Phases 0–14 complete  |  Test suite: 37 suites, 0 failures  |  4 benchmark groups
 ================================================================================
 
 
@@ -29,12 +29,15 @@ Run all tests
     rupeecoin-crypto      11 tests   (HD derivation, hash, address)
     rupeecoin-economics   16 tests   (supply schedule, fee market — incl. proptest)
     rupeecoin-mempool      6 tests   (ordering, eviction — incl. proptest)
-    rupeecoin-network     11 tests   (Dandelion++ routing, peer selection)
+    rupeecoin-network     15 tests   (Dandelion++ routing, peer selection, rate limiting)
+    rupeecoin-utxo         6 tests   (coinbase maturity, UTXO validation — incl. proptest)
     rupeecoin-privacy      7 tests   (notes, nullifiers, Merkle, shielded tx)
+    rupeecoin-rvm         12 tests   (opcodes, gas, token standards, EVM transpiler)
     rupeecoin-sdk         11 tests   (wallet, tx helpers, RPC client)
     rupeecoin-tests       17 tests   (cross-crate integration)
     ─────────────────────────────────
-    Total                 81 tests   0 failures
+    Total: 37 compiled test suites, 0 failures
+    Run  cargo test --workspace  for live counts.
 
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -93,6 +96,29 @@ All flags are optional.  Defaults are shown in brackets.
         Example: --checkpoint 604800:<64-char-hash>:<64-char-state-root>
         Checkpoints are auto-saved every 604800 blocks (~28 days at 4 s/slot).
 
+  --tor-proxy <ip:port>
+        Route all outbound P2P connections through a Tor SOCKS5 proxy.
+        Inbound connections continue to arrive via the standard TCP listener.
+        Default: disabled (direct connections)
+        Examples:
+          --tor-proxy 127.0.0.1:9050   (Tor daemon default)
+          --tor-proxy 127.0.0.1:9150   (Tor Browser)
+        Note: to receive inbound .onion connections, configure Tor separately and
+        advertise the .onion address via --listen /dns4/<xyz>.onion/tcp/30333.
+
+  --genesis-timestamp <unix_seconds>
+        UNIX timestamp written into the genesis block.
+        Default: 1_700_000_000  (2023-11-14 22:13:20 UTC — protocol reference epoch)
+        For mainnet launch: set to the exact T-0 epoch second, announced 72 h in advance.
+        Example: --genesis-timestamp 1735689600
+
+  --treasury-address <40-char-hex>
+        Override the default treasury address used for PMFP and block-reward splits.
+        Must be a 40-character hex string (20 raw bytes, no 0x prefix).
+        Set once at startup; a second call on the same process is silently ignored.
+        For mainnet: set to the multi-sig treasury address before producing any blocks.
+        Example: --treasury-address deadbeefdeadbeefdeadbeefdeadbeefdeadbeef
+
   --help / -h
         Print this flag reference and exit.
 
@@ -122,6 +148,15 @@ Store chain data in a specific directory:
 
 Expose RPC on a non-default port:
   rupeecoin-node --rpc-port 8080
+
+Route all P2P traffic through Tor (requires Tor daemon running on 9050):
+  rupeecoin-node --tor-proxy 127.0.0.1:9050 --stake 10000
+
+Launch mainnet node with treasury and genesis timestamp configured:
+  rupeecoin-node \
+    --genesis-timestamp 1735689600 \
+    --treasury-address <40-char-hex-multisig-address> \
+    --stake 10000
 
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -232,6 +267,15 @@ Global flag (applies to every subcommand):
     --amount <f64>   Amount in whole RPC (e.g. 1.5 for 1.5 RPC)
     --fee <f64>      Transaction fee in RPC.  Default: 0.001
     --rpc <url>      Node RPC URL.  Default: http://127.0.0.1:9944
+    --hardware-wallet <ledger|trezor>
+                     Sign via a connected hardware wallet instead of the software
+                     keystore.  Mutually exclusive with passphrase-based signing.
+                       ledger  Scans /dev/hidraw0–15 for Ledger Nano S/X/S+/Stax
+                               (USB VID 0x2C97).  Requires the RupeeCoin Ledger
+                               app to be installed and unlocked on the device.
+                               No libudev or hidapi needed — uses raw ioctl.
+                       trezor  Not yet supported (Phase 15 carry-over — requires
+                               custom Trezor firmware with Dilithium3 signing).
 
   Examples:
     # Send 10 RPC to an address
@@ -610,6 +654,22 @@ Global flag (applies to every subcommand):
   STEM_MAX_HOPS         10      maximum stem hops (uniform random pick)
   STEM_TIMEOUT          10s     fallback: if not seen via gossipsub, fluff
 
+  ── Chain safety ───────────────────────────────────────────────────────────
+  REORG_DEPTH           32      maximum blocks rolled back during a chain reorg
+                                (deeper reorgs require privacy state resync)
+  COINBASE_MATURITY     100     blocks a coinbase UTXO must age before it can be spent
+
+  ── P2P rate limiting ──────────────────────────────────────────────────────
+  GOSSIP_RATE_MSGS      100     maximum gossipsub messages per peer per window
+  GOSSIP_RATE_WINDOW    10 s    per-peer token bucket refill window
+
+  ── RupeeCoin VM (RVM) ─────────────────────────────────────────────────────
+  RVM_STACK_LIMIT       1 024   maximum stack depth (stack overflow = abort)
+  RVM_MEMORY_LIMIT      32 MiB  maximum heap per execution
+  RVM_GAS_SSTORE        100     gas cost of SSTORE opcode
+  RVM_GAS_SLOAD          10     gas cost of SLOAD opcode
+  RVM_GAS_CALL          400     gas cost of inter-contract CALL
+
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   PART 7 — CRATE MAP (workspace layout)
@@ -642,8 +702,13 @@ Global flag (applies to every subcommand):
   core/blockchain    Chain, build_block, build_coinbase, genesis_block
                      Full block validation + state transition
 
-  core/storage       ChainStore (RocksDB) — block persistence, nullifiers,
-                     shielded outputs, checkpoints
+  core/rvm           RupeeCoin Virtual Machine — 64-bit stack-based interpreter,
+                     gas metering (base_gas per opcode), RPC-20 / RPC-721 / RPC-1155
+                     token bytecode standards, EVM→RVM transpiler (evm2rvm)
+
+  core/storage       ChainStore (RocksDB) — 9 column families:
+                     blocks, heights, utxos, meta, nullifiers, note_cmts,
+                     shielded_outs, checkpoints, contract_storage
 
   core/network       libp2p swarm — gossipsub, request-response sync,
                      Dandelion++ (dandelion.rs), peer management
@@ -1213,5 +1278,6 @@ Global flag (applies to every subcommand):
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   END OF GUIDE
-  RupeeCoin — Phases 0–10.2 complete.  86 tests + 4 benchmark groups passing.
+  RupeeCoin — Phases 0–14 complete.  37 test suites + 4 benchmark groups passing.
+  Security checklist: 7/7 items resolved.  Public testnet ready.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━                                                                                                                                             

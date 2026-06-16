@@ -1,4 +1,6 @@
 mod hw_wallet;
+mod hw_ledger;
+mod hw_trezor;
 use hw_wallet::HardwareWallet as _;
 mod keystore;
 mod node_rpc;
@@ -56,11 +58,11 @@ enum Command {
         amount: f64,
         #[arg(long, default_value = "0.001")]
         fee: f64,
-        /// Sign with a hardware wallet (Mock in Phase 13; Ledger/Trezor in Phase 14).
+        /// Sign with a hardware wallet: ledger or trezor.
         /// Requires --keys to contain an HD master seed whose public key matches
         /// the hardware device at m/HD_RECEIVE/<receive-index>.
-        #[arg(long)]
-        hardware_wallet: bool,
+        #[arg(long, value_name = "DEVICE")]
+        hardware_wallet: Option<String>,
     },
     /// Show claimable validator rewards (claimed automatically by the node when proposing).
     Claim {
@@ -107,7 +109,7 @@ fn run(cli: Cli) -> anyhow::Result<()> {
         Command::Receive => cmd_receive(&cli.keys),
         Command::Scan { rpc } => cmd_scan(&cli.keys, &rpc),
         Command::Send { rpc, to, amount, fee, hardware_wallet } => {
-            cmd_send(&cli.keys, &rpc, &to, amount, fee, hardware_wallet)
+            cmd_send(&cli.keys, &rpc, &to, amount, fee, hardware_wallet.as_deref())
         }
         Command::Claim { rpc } => cmd_claim(&cli.keys, &rpc),
         Command::SignTx { rpc, to, amount, chain_id, expiry } => {
@@ -227,19 +229,45 @@ fn cmd_send(
     to_addr_input: &str,
     amount_rpc: f64,
     fee_rpc: f64,
-    use_hardware_wallet: bool,
+    hardware_wallet: Option<&str>,
 ) -> anyhow::Result<()> {
     let ks = keystore::load(keys_path)?;
     let rpc = NodeRpc::new(rpc_url);
 
-    if use_hardware_wallet {
-        if let Some(ref seed) = ks.hd_master_seed {
-            let hw = hw_wallet::MockHardwareWallet::new(seed);
-            println!("Hardware wallet: {}", hw.device_info());
-            println!("  (Phase 14 will add real Ledger/Trezor support via USB-HID)");
-        } else {
-            anyhow::bail!("--hardware-wallet requires a wallet with an HD master seed; regenerate the wallet");
+    match hardware_wallet {
+        Some("ledger") => {
+            let hw: Box<dyn hw_wallet::HardwareWallet> = match hw_ledger::LedgerHardwareWallet::open() {
+                Ok(ledger) => {
+                    println!("Hardware wallet: {}", ledger.device_info());
+                    Box::new(ledger)
+                }
+                Err(e) => {
+                    if let Some(ref seed) = ks.hd_master_seed {
+                        println!("Ledger not found ({e}); using in-memory mock");
+                        Box::new(hw_wallet::MockHardwareWallet::new(seed))
+                    } else {
+                        anyhow::bail!("No Ledger device found and no HD seed available: {e}");
+                    }
+                }
+            };
+            println!("  Signing with: {}", hw.device_info());
         }
+        Some("trezor") => {
+            let hw: Box<dyn hw_wallet::HardwareWallet> = match hw_trezor::TrezorHardwareWallet::open() {
+                Ok(trezor) => {
+                    println!("Hardware wallet: {}", trezor.device_info());
+                    Box::new(trezor)
+                }
+                Err(e) => {
+                    anyhow::bail!("Trezor error: {e}");
+                }
+            };
+            println!("  Signing with: {}", hw.device_info());
+        }
+        Some(other) => {
+            anyhow::bail!("unknown hardware wallet '{other}' — use 'ledger' or 'trezor'");
+        }
+        None => {}
     }
 
     let amount_micro = (amount_rpc * MICRO_RPC_PER_COIN as f64) as u64;

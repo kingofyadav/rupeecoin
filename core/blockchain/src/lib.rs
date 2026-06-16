@@ -1,6 +1,6 @@
 pub mod genesis;
 
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use rupeecoin_consensus::{select_proposer, slot_to_epoch, verify_block_vrf, SLOTS_PER_EPOCH};
@@ -17,9 +17,10 @@ use rupeecoin_types::{
     MAINNET_CHAIN_ID,
 };
 use rupeecoin_utxo::{UtxoError, UtxoSet};
+use rupeecoin_crypto::Address;
 use thiserror::Error;
 
-pub use genesis::genesis_block;
+pub use genesis::{genesis_block, genesis_block_with_timestamp};
 
 /// How many recent blocks to keep in RAM.  Older blocks are retrieved from
 /// `ChainStore` on demand.  This prevents unbounded heap growth on long chains.
@@ -71,8 +72,28 @@ pub enum ChainError {
     InvalidSlashingReport(String),
 }
 
+/// Maximum depth at which a chain reorg will be attempted.
+pub const REORG_DEPTH: usize = 32;
+
+/// Reversible UTXO changes made by a single block.
+/// Privacy state (commitment tree, nullifiers) is append-only and not rolled
+/// back — reorgs involving shielded transactions are deferred to Phase 15.
+#[derive(Debug, Clone)]
+pub struct BlockDelta {
+    /// UTXOs created by this block (removed on rollback).
+    pub added: Vec<OutPoint>,
+    /// UTXOs consumed by this block (restored on rollback).
+    pub removed: Vec<(OutPoint, TxOutput)>,
+    /// Coinbase outputs whose maturity records must be removed on rollback.
+    pub coinbase_added: Vec<OutPoint>,
+    /// Addresses whose nonce was incremented (decremented on rollback).
+    pub nonce_incremented: Vec<Address>,
+}
+
 pub struct Chain {
     pub blocks: Vec<Block>,
+    /// Parallel to `blocks`: UTXO delta for each block, used for reorg rollback.
+    block_deltas: VecDeque<BlockDelta>,
     pub utxo_set: UtxoSet,
     pub commitment_tree: CommitmentTree,
     pub spent_nullifiers: HashSet<Nullifier>,
@@ -90,8 +111,16 @@ impl Chain {
             .expect("genesis block must be valid");
         let commitment_tree = CommitmentTree::new();
         let genesis_root = commitment_tree.root();
+        // Genesis delta is empty — we never roll back past genesis.
+        let genesis_delta = BlockDelta {
+            added: vec![],
+            removed: vec![],
+            coinbase_added: vec![],
+            nonce_incremented: vec![],
+        };
         Chain {
             blocks: vec![genesis],
+            block_deltas: VecDeque::from([genesis_delta]),
             utxo_set,
             commitment_tree,
             spent_nullifiers: HashSet::new(),
@@ -108,16 +137,26 @@ impl Chain {
         self.tip().header.height
     }
 
+    /// Return `true` if a block with `hash` is in the canonical chain.
+    pub fn contains_hash(&self, hash: &Hash) -> bool {
+        self.blocks.iter().any(|b| b.hash() == *hash)
+    }
+
     pub fn add_block(
         &mut self,
         block: Block,
         registry: &mut ValidatorRegistry,
     ) -> Result<(), ChainError> {
         self.validate(&block, registry)?;
+
+        // Compute the delta before applying (so we know which UTXOs existed).
+        let delta = self.compute_delta(&block);
         self.utxo_set.apply_block(&block)?;
 
         let computed = self.utxo_set.state_root();
         if block.header.state_root != computed {
+            // Undo the UTXO apply before returning the error.
+            self.undo_utxo_delta(&delta);
             return Err(ChainError::InvalidStateRoot(block.header.state_root, computed));
         }
 
@@ -137,11 +176,93 @@ impl Chain {
 
         self.apply_economics(&block, registry);
         self.apply_special_txs(&block, registry);
+        self.block_deltas.push_back(delta);
         self.blocks.push(block);
         // Evict old blocks beyond the sliding window to prevent unbounded RAM growth.
         if self.blocks.len() > BLOCK_KEEP_LAST {
             let excess = self.blocks.len() - BLOCK_KEEP_LAST;
             self.blocks.drain(..excess);
+            for _ in 0..excess {
+                self.block_deltas.pop_front();
+            }
+        }
+        Ok(())
+    }
+
+    /// Compute the UTXO delta for `block` without applying it.
+    fn compute_delta(&self, block: &Block) -> BlockDelta {
+        let mut added = Vec::new();
+        let mut removed = Vec::new();
+        let mut coinbase_added = Vec::new();
+        let mut nonce_incremented = Vec::new();
+
+        for (tx_idx, tx) in block.transactions.iter().enumerate() {
+            let is_coinbase = tx_idx == 0 && tx.inputs.is_empty();
+            for input in &tx.inputs {
+                if let Some(out) = self.utxo_set.get(&input.outpoint) {
+                    removed.push((input.outpoint.clone(), out.clone()));
+                }
+                if let Some(first) = tx.inputs.first() {
+                    let addr = first.public_key.to_address();
+                    if !nonce_incremented.contains(&addr) {
+                        nonce_incremented.push(addr);
+                    }
+                }
+            }
+            let txid = tx.txid();
+            for (vout, _) in tx.outputs.iter().enumerate() {
+                let op = OutPoint { txid, vout: vout as u32 };
+                added.push(op.clone());
+                if is_coinbase {
+                    coinbase_added.push(op);
+                }
+            }
+        }
+
+        BlockDelta { added, removed, coinbase_added, nonce_incremented }
+    }
+
+    /// Undo a block's UTXO changes.  Used for reorg rollback.
+    /// Privacy state (commitment tree, nullifiers) is NOT rolled back.
+    fn undo_utxo_delta(&mut self, delta: &BlockDelta) {
+        for op in &delta.added {
+            self.utxo_set.remove(op);
+        }
+        for (op, out) in &delta.removed {
+            self.utxo_set.insert(op.clone(), out.clone());
+        }
+        for op in &delta.coinbase_added {
+            self.utxo_set.remove_coinbase_height(op);
+        }
+        for addr in &delta.nonce_incremented {
+            self.utxo_set.decrement_nonce(addr);
+        }
+    }
+
+    /// Roll back `count` blocks from the chain tip, undoing UTXO state.
+    /// Returns the blocks that were removed (tip first).
+    pub fn rollback(&mut self, count: usize) -> Vec<Block> {
+        let mut removed = Vec::new();
+        for _ in 0..count.min(self.blocks.len().saturating_sub(1)) {
+            if let Some(delta) = self.block_deltas.pop_back() {
+                self.undo_utxo_delta(&delta);
+            }
+            if let Some(block) = self.blocks.pop() {
+                removed.push(block);
+            }
+        }
+        removed
+    }
+
+    /// Apply a sequence of fork blocks starting just after the current tip.
+    /// All blocks must form a valid chain from current tip forward.
+    pub fn apply_fork(
+        &mut self,
+        fork_blocks: Vec<Block>,
+        registry: &mut ValidatorRegistry,
+    ) -> Result<(), ChainError> {
+        for block in fork_blocks {
+            self.add_block(block, registry)?;
         }
         Ok(())
     }

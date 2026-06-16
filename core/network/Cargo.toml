@@ -16,3 +16,4 @@ anyhow          = { workspace = true }
 serde           = { workspace = true }
 async-trait     = "0.1"
 rand            = { workspace = true }
+tokio-util      = { version = "0.7", features = ["compat"] }

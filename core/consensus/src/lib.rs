@@ -286,6 +286,17 @@ impl ConsensusState {
         )
     }
 
+    /// Register a fork block in the LMD-GHOST block tree without running
+    /// attestation validation.  Called for blocks that arrived on an alternative
+    /// fork so `lmd_select_head` can consider them when choosing the heaviest path.
+    pub fn register_fork_block(&mut self, block_hash: Hash, parent_hash: Hash) {
+        self.known_block_parents.entry(block_hash).or_insert(parent_hash);
+        self.known_block_children
+            .entry(parent_hash)
+            .or_default()
+            .push(block_hash);
+    }
+
     // ── LMD-GHOST ─────────────────────────────────────────────────────────────
 
     /// Select the canonical chain head using LMD-GHOST starting from `start`.

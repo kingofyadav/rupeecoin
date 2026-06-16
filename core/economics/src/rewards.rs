@@ -1,3 +1,5 @@
+use std::sync::OnceLock;
+
 use rupeecoin_crypto::{hash_data, Address, Hash};
 use rupeecoin_staking::ValidatorRegistry;
 
@@ -18,17 +20,29 @@ pub const FEE_PMFP_PERCENT: u64 = 30;
 
 // ── Treasury address ──────────────────────────────────────────────────────────
 
+static TREASURY_OVERRIDE: OnceLock<Address> = OnceLock::new();
+
 /// Canonical treasury address: first 20 bytes of BLAKE3("rupeecoin-treasury-v1").
-/// The treasury is controlled by on-chain governance (Phase 7+).
+/// Returns the override set by `set_treasury_address()` if one has been set.
 pub fn treasury_address() -> Address {
-    use std::sync::OnceLock;
-    static ADDR: OnceLock<Address> = OnceLock::new();
-    *ADDR.get_or_init(|| {
+    if let Some(addr) = TREASURY_OVERRIDE.get() {
+        return *addr;
+    }
+    static DEFAULT: OnceLock<Address> = OnceLock::new();
+    *DEFAULT.get_or_init(|| {
         let h = hash_data(b"rupeecoin-treasury-v1");
         let mut arr = [0u8; 20];
         arr.copy_from_slice(&h.as_bytes()[..20]);
         Address(arr)
     })
+}
+
+/// Override the treasury address before the node starts.
+///
+/// Must be called at most once before any block is processed; subsequent
+/// calls are ignored.  Used by the `--treasury-address` CLI flag.
+pub fn set_treasury_address(addr: Address) {
+    let _ = TREASURY_OVERRIDE.set(addr);
 }
 
 // ── Reward split ──────────────────────────────────────────────────────────────
