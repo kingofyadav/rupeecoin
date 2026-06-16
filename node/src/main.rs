@@ -7,11 +7,12 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use libp2p::Multiaddr;
+use libp2p::{Multiaddr, PeerId};
 use tokio::time;
 use tracing::{error, info, warn};
 
-use rupeecoin_blockchain::{build_block, build_reward_claim, build_slash_report, genesis_block, Chain};
+use rupeecoin_blockchain::{build_block, build_reward_claim, build_slash_report, genesis_block_with_timestamp, Chain, REORG_DEPTH};
+use std::collections::HashMap as StdHashMap;
 use rupeecoin_consensus::{
     select_proposer, slot_to_epoch, CheckpointManager, ConsensusState, WeakSubjectivityCheckpoint,
     SLOT_DURATION_SECS, SLOTS_PER_EPOCH,
@@ -44,6 +45,10 @@ struct Config {
     tor: Option<tor::TorConfig>,
     /// Phase 13.2: optional custom genesis config loaded from a JSON file.
     genesis_config: Option<GenesisConfig>,
+    /// Phase 14.6: custom genesis timestamp (unix seconds). Default: 1_700_000_000.
+    genesis_timestamp: u64,
+    /// Phase 15 N-04: optional allowlist of trusted gossipsub PeerIds.
+    peer_allowlist: Option<HashSet<PeerId>>,
 }
 
 fn parse_args() -> Result<Config> {
@@ -57,6 +62,8 @@ fn parse_args() -> Result<Config> {
     let mut validator_seed: Option<[u8; 32]> = None;
     let mut tor_config: Option<tor::TorConfig> = None;
     let mut genesis_config: Option<GenesisConfig> = None;
+    let mut genesis_timestamp: u64 = 1_700_000_000;
+    let mut peer_allowlist: Option<HashSet<PeerId>> = None;
 
     let mut args = std::env::args().skip(1);
     while let Some(flag) = args.next() {
@@ -132,6 +139,38 @@ fn parse_args() -> Result<Config> {
                 cfg.validate().map_err(|e| anyhow::anyhow!("invalid genesis config: {e}"))?;
                 genesis_config = Some(cfg);
             }
+            "--genesis-timestamp" => {
+                genesis_timestamp = args
+                    .next()
+                    .context("--genesis-timestamp requires a unix timestamp (seconds)")?
+                    .parse()?;
+            }
+            "--peer-allowlist" => {
+                let path = args.next().context("--peer-allowlist requires a file path")?;
+                let content = std::fs::read_to_string(&path)
+                    .with_context(|| format!("reading peer allowlist from '{path}'"))?;
+                let mut set = HashSet::new();
+                for line in content.lines() {
+                    let line = line.trim();
+                    if line.is_empty() || line.starts_with('#') {
+                        continue;
+                    }
+                    let peer = line.parse::<PeerId>()
+                        .with_context(|| format!("invalid PeerId in allowlist: '{line}'"))?;
+                    set.insert(peer);
+                }
+                info!("Peer allowlist loaded: {} trusted peers", set.len());
+                peer_allowlist = Some(set);
+            }
+            "--treasury-address" => {
+                let hex_addr = args.next().context("--treasury-address requires a 40-char hex address")?;
+                let raw = hex::decode(&hex_addr)
+                    .context("--treasury-address must be valid hex")?;
+                let arr: [u8; 20] = raw
+                    .try_into()
+                    .map_err(|_| anyhow::anyhow!("--treasury-address must be exactly 20 bytes (40 hex chars)"))?;
+                rupeecoin_economics::set_treasury_address(rupeecoin_crypto::Address(arr));
+            }
             "--help" | "-h" => {
                 println!(
                     "rupeecoin-node\n\
@@ -148,9 +187,13 @@ fn parse_args() -> Result<Config> {
                      --validator-seed <hex>                  32-byte seed for deterministic validator keypair\n\
                      --tor-socks <host:port>                 route outgoing P2P connections through Tor SOCKS5 proxy\n\
                      --genesis-config <path>                 load genesis parameters from JSON file (overrides built-in mainnet config)\n\
+                     --genesis-timestamp <unix_secs>         override genesis block timestamp (default: 1700000000)\n\
+                     --treasury-address <hex>                override treasury address (40 hex chars / 20 bytes)\n\
+                     --peer-allowlist <path>                 restrict gossipsub to listed PeerIds (one per line)\n\
                      \n\
                      Example: --stake 10000 --checkpoint 604800:<hash_hex>:<state_hex>\n\
-                     Tor example: --tor-socks 127.0.0.1:9050 --peer /dns4/xyz.onion/tcp/30333"
+                     Tor example: --tor-socks 127.0.0.1:9050 --peer /dns4/xyz.onion/tcp/30333\n\
+                     Allowlist: --peer-allowlist /etc/rupeecoin/trusted-peers.txt"
                 );
                 std::process::exit(0);
             }
@@ -172,6 +215,8 @@ fn parse_args() -> Result<Config> {
         validator_seed,
         tor: tor_config,
         genesis_config,
+        genesis_timestamp,
+        peer_allowlist,
     })
 }
 
@@ -180,13 +225,14 @@ fn parse_args() -> Result<Config> {
 fn load_or_create_chain(
     store: &ChainStore,
     checkpoint_mgr: &CheckpointManager,
+    genesis_timestamp: u64,
 ) -> Result<Chain> {
     let mut empty = ValidatorRegistry::new();
 
     match store.get_tip().context("reading chain tip from store")? {
         None => {
             info!("No existing chain — creating genesis block");
-            let genesis = genesis_block();
+            let genesis = genesis_block_with_timestamp(genesis_timestamp);
             store.apply_block(&genesis).context("storing genesis block")?;
             Ok(Chain::new(genesis))
         }
@@ -336,6 +382,67 @@ fn update_rpc_snapshot(
     }
 }
 
+fn persist_contract_storage(store: &ChainStore, block: &rupeecoin_types::Block, height: u64) {
+    use rupeecoin_rvm::{run, ExecContext, ExecResult};
+    use rupeecoin_types::contract::{ContractCall, ContractDeploy};
+    for tx in &block.transactions {
+        let Some(ref data) = tx.coinbase_data else { continue };
+        if let Some(deploy) = ContractDeploy::decode(data) {
+            let ctx = ExecContext {
+                caller: 0,
+                call_value: deploy.value,
+                block_height: height,
+                timestamp: block.header.timestamp,
+                chain_id: 1,
+                self_addr: tx.txid().as_bytes()[..8].try_into().map(u64::from_le_bytes).unwrap_or(0),
+                gas_limit: deploy.gas_limit,
+                calldata: deploy.constructor_args,
+            };
+            let contract_addr = ctx.self_addr;
+            match store.load_contract_storage(contract_addr) {
+                Ok(storage) => {
+                    if let Ok((ExecResult::Return { .. }, new_storage)) = run(&deploy.bytecode, storage, ctx) {
+                        if let Err(e) = store.save_contract_storage(contract_addr, &new_storage) {
+                            error!("persist contract storage (deploy) addr={contract_addr}: {e}");
+                        }
+                        if let Err(e) = store.save_contract_code(contract_addr, &deploy.bytecode) {
+                            error!("persist contract code (deploy) addr={contract_addr}: {e}");
+                        }
+                    }
+                }
+                Err(e) => error!("load contract storage (deploy) addr={contract_addr}: {e}"),
+            }
+        } else if let Some(call) = ContractCall::decode(data) {
+            match store.load_contract_code(call.contract_addr) {
+                Ok(Some(bytecode)) => {
+                    match store.load_contract_storage(call.contract_addr) {
+                        Ok(storage) => {
+                            let ctx = ExecContext {
+                                caller: 0,
+                                call_value: call.value,
+                                block_height: height,
+                                timestamp: block.header.timestamp,
+                                chain_id: 1,
+                                self_addr: call.contract_addr,
+                                gas_limit: call.gas_limit,
+                                calldata: call.calldata,
+                            };
+                            if let Ok((ExecResult::Return { .. }, new_storage)) = run(&bytecode, storage, ctx) {
+                                if let Err(e) = store.save_contract_storage(call.contract_addr, &new_storage) {
+                                    error!("persist contract storage (call) addr={}: {e}", call.contract_addr);
+                                }
+                            }
+                        }
+                        Err(e) => error!("load contract storage (call) addr={}: {e}", call.contract_addr),
+                    }
+                }
+                Ok(None) => warn!("RVM call to {}: contract not deployed on this node", call.contract_addr),
+                Err(e) => error!("load contract code (call) addr={}: {e}", call.contract_addr),
+            }
+        }
+    }
+}
+
 fn persist_registry(store: &ChainStore, registry: &ValidatorRegistry) {
     match bincode::serialize(registry) {
         Ok(bytes) => {
@@ -361,6 +468,64 @@ fn maybe_save_checkpoint(store: &ChainStore, chain: &Chain) {
             info!("Saved weak-subjectivity checkpoint at height {h}  hash={}", cp.block_hash);
         }
     }
+}
+
+// ── LMD-GHOST reorg helper ────────────────────────────────────────────────────
+
+struct ReorgResult {
+    rolled_back: usize,
+    applied: usize,
+}
+
+/// Attempt to reorg the canonical chain so it ends at `lmd_head`.
+///
+/// Returns `Some(ReorgResult)` when the reorg succeeded, `None` when it cannot
+/// be performed (missing fork blocks, divergence exceeds REORG_DEPTH, etc.).
+fn try_reorg(
+    chain: &mut Chain,
+    registry: &mut rupeecoin_staking::ValidatorRegistry,
+    consensus: &ConsensusState,
+    fork_blocks: &StdHashMap<Hash, rupeecoin_types::Block>,
+    lmd_head: Hash,
+) -> Option<ReorgResult> {
+    // Walk back from lmd_head to find the path to the common ancestor.
+    let mut fork_path: Vec<Hash> = vec![lmd_head];
+    let mut cursor = lmd_head;
+    loop {
+        let parent = *consensus.known_block_parents.get(&cursor)?;
+        if chain.contains_hash(&parent) {
+            break; // found common ancestor
+        }
+        fork_path.push(parent);
+        cursor = parent;
+        if fork_path.len() > REORG_DEPTH {
+            return None; // too deep — refuse the reorg
+        }
+    }
+
+    // Collect actual Block objects for the fork path (oldest first).
+    fork_path.reverse();
+    let fork_blocks_ordered: Vec<rupeecoin_types::Block> = fork_path
+        .iter()
+        .map(|h| fork_blocks.get(h).cloned())
+        .collect::<Option<Vec<_>>>()?;
+
+    // Determine how many canonical blocks to roll back so the common ancestor
+    // becomes the new tip.  The common ancestor is the parent of fork_path[0].
+    let common_ancestor = *consensus.known_block_parents.get(&fork_path[0])?;
+    let canon_tip_height = chain.height();
+    let ancestor_height = fork_blocks.get(&fork_path[0])
+        .map(|b| b.header.height.saturating_sub(1))
+        .unwrap_or(0);
+    let rollback_count = (canon_tip_height.saturating_sub(ancestor_height)) as usize;
+    let _ = common_ancestor; // used for clarity only; heights derive the count
+
+    let removed = chain.rollback(rollback_count);
+    let rolled_back = removed.len();
+    let applied = fork_blocks_ordered.len();
+    chain.apply_fork(fork_blocks_ordered, registry).ok()?;
+
+    Some(ReorgResult { rolled_back, applied })
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────────
@@ -415,7 +580,7 @@ async fn main() -> Result<()> {
     info!("Validator address (UTXO/transparent): {}", rupeecoin_crypto::encode_address(&my_transparent_addr));
 
     let store = Arc::new(store);
-    let mut chain = load_or_create_chain(&store, &checkpoint_mgr)?;
+    let mut chain = load_or_create_chain(&store, &checkpoint_mgr, cfg.genesis_timestamp)?;
     let mut mempool = Mempool::new(4096);
 
     // 8.2: restore persisted validator registry so claimable_rewards survive restart.
@@ -446,6 +611,9 @@ async fn main() -> Result<()> {
         validators: std::collections::HashMap::new(),
     }));
     let mut pending_slash_reports: Vec<rupeecoin_types::SlashingEvidence> = Vec::new();
+    // Fork blocks cache: blocks on competing forks, keyed by block hash.
+    // Used by the LMD-GHOST reorg logic to find fork chain paths.
+    let mut fork_blocks: StdHashMap<Hash, rupeecoin_types::Block> = StdHashMap::new();
     let pending_privacy_txs: Arc<Mutex<Vec<PrivacyTransaction>>> =
         Arc::new(Mutex::new(Vec::new()));
     let pending_txs: Arc<Mutex<Vec<rupeecoin_types::Transaction>>> =
@@ -488,8 +656,9 @@ async fn main() -> Result<()> {
     }
 
     info!("Starting P2P network on {}", cfg.listen);
+    let tor_proxy = cfg.tor.as_ref().map(|t| t.proxy_addr);
     let (net_cmd, mut net_event) =
-        rupeecoin_network::start(cfg.listen).context("starting network")?;
+        rupeecoin_network::start(cfg.listen, tor_proxy, cfg.peer_allowlist).context("starting network")?;
 
     for addr in cfg.peers {
         info!("Dialing seed peer {addr}");
@@ -552,6 +721,8 @@ async fn main() -> Result<()> {
                             if let Err(e) = store.apply_block(&block) {
                                 error!("persist block {height}: {e}");
                             }
+                            // 14.4: persist RVM contract storage for contract txs.
+                            persist_contract_storage(&store, &block, height);
                             // 8.2: persist registry so rewards survive restart.
                             persist_registry(&store, &registry);
                             maybe_save_checkpoint(&store, &chain);
@@ -597,13 +768,54 @@ async fn main() -> Result<()> {
                                     .await;
                             }
 
-                            let lmd_head = consensus.lmd_select_head(block.hash(), &registry);
+                            // 14.3: LMD-GHOST reorg — check if the canonical head has shifted.
+                            let tip_hash = chain.tip().hash();
+                            let lmd_head = consensus.lmd_select_head(tip_hash, &registry);
+                            if lmd_head != tip_hash {
+                                // The heaviest attestation-weighted subtree is not at our tip.
+                                // Attempt a reorg if we have the fork blocks cached and the
+                                // common ancestor is within REORG_DEPTH.
+                                if let Some(reorg_result) = try_reorg(
+                                    &mut chain,
+                                    &mut registry,
+                                    &consensus,
+                                    &fork_blocks,
+                                    lmd_head,
+                                ) {
+                                    info!(
+                                        "Reorg to LMD-GHOST head {}  rolled_back={}  applied={}",
+                                        lmd_head,
+                                        reorg_result.rolled_back,
+                                        reorg_result.applied,
+                                    );
+                                    persist_registry(&store, &registry);
+                                    update_rpc_snapshot(&rpc_chain_snapshot, &chain, &registry, &mempool, &consensus);
+                                } else {
+                                    warn!(
+                                        "LMD-GHOST head {lmd_head} diverges from tip {tip_hash} — reorg not possible yet"
+                                    );
+                                }
+                            }
+
                             info!(
                                 "Accepted block {height} from {from}  hash={}  justified={}  finalized={}  lmd_head={}",
-                                block.hash(),
+                                chain.tip().hash(),
                                 consensus.finality.last_justified_epoch(),
                                 consensus.finality.last_finalized_epoch(),
                                 lmd_head,
+                            );
+                        }
+                        Err(rupeecoin_blockchain::ChainError::InvalidPrevHash) => {
+                            // Block is on a fork — register it so LMD-GHOST can see it.
+                            let block_hash = block.hash();
+                            let parent_hash = block.header.prev_hash;
+                            consensus.register_fork_block(block_hash, parent_hash);
+                            // Cache for potential reorg (limit 128 blocks to bound memory).
+                            if fork_blocks.len() < 128 {
+                                fork_blocks.insert(block_hash, *block);
+                            }
+                            warn!(
+                                "Fork block {height} from {from}  hash={block_hash}  parent={parent_hash}"
                             );
                         }
                         Err(e) => warn!("Rejected block {height} from {from}: {e}"),

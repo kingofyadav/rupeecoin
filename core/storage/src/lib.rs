@@ -16,6 +16,8 @@ const CF_NULLIFIERS: &str = "nullifiers"; // nullifier hash → block height (u6
 const CF_NOTE_COMMITMENTS: &str = "note_cmts"; // leaf index (u64 BE) → NoteCommitment
 const CF_SHIELDED_OUTPUTS: &str = "shielded_outs"; // leaf index (u64 BE) → ShieldedOutput (full)
 const CF_CHECKPOINTS: &str = "checkpoints"; // u64 BE height → WeakSubjectivityCheckpoint
+const CF_CONTRACT_STORAGE: &str = "contract_storage"; // addr_u64_le ++ slot_u64_le → val_u64_le
+const CF_CONTRACT_CODE: &str = "contract_code"; // addr_u64_le(8B) → bytecode bytes
 
 const META_TIP_HASH: &[u8] = b"tip_hash";
 const META_HEIGHT: &[u8] = b"height";
@@ -51,6 +53,8 @@ impl ChainStore {
             CF_NOTE_COMMITMENTS,
             CF_SHIELDED_OUTPUTS,
             CF_CHECKPOINTS,
+            CF_CONTRACT_STORAGE,
+            CF_CONTRACT_CODE,
         ]
         .map(|name| ColumnFamilyDescriptor::new(name, Options::default()));
 
@@ -71,6 +75,8 @@ impl ChainStore {
             CF_NOTE_COMMITMENTS,
             CF_SHIELDED_OUTPUTS,
             CF_CHECKPOINTS,
+            CF_CONTRACT_STORAGE,
+            CF_CONTRACT_CODE,
         ];
         let db = DB::open_cf_for_read_only(&opts, path, cf_names, false)?;
         Ok(ChainStore { db: Arc::new(db) })
@@ -91,6 +97,8 @@ impl ChainStore {
             CF_NOTE_COMMITMENTS,
             CF_SHIELDED_OUTPUTS,
             CF_CHECKPOINTS,
+            CF_CONTRACT_STORAGE,
+            CF_CONTRACT_CODE,
         ];
         std::fs::create_dir_all(secondary_path).ok();
         let db = DB::open_cf_as_secondary(&opts, primary_path, secondary_path, cf_names)?;
@@ -335,6 +343,73 @@ impl ChainStore {
             }
         }
         Ok(results)
+    }
+
+    // ── RVM contract storage ─────────────────────────────────────────────────
+
+    /// Compose the RocksDB key for a contract storage slot.
+    fn contract_storage_key(contract_addr: u64, slot: u64) -> [u8; 16] {
+        let mut key = [0u8; 16];
+        key[..8].copy_from_slice(&contract_addr.to_le_bytes());
+        key[8..].copy_from_slice(&slot.to_le_bytes());
+        key
+    }
+
+    /// Load all storage slots for `contract_addr`, returning a `HashMap<slot, value>`.
+    pub fn load_contract_storage(
+        &self,
+        contract_addr: u64,
+    ) -> Result<std::collections::HashMap<u64, u64>, StorageError> {
+        use rocksdb::IteratorMode;
+        let cf = self.cf(CF_CONTRACT_STORAGE)?;
+        let prefix = contract_addr.to_le_bytes();
+        let mut map = std::collections::HashMap::new();
+        // Iterate from the first key with this prefix.
+        for item in self.db.iterator_cf(cf, IteratorMode::From(&prefix, rocksdb::Direction::Forward)) {
+            let (k, v) = item?;
+            if k.len() != 16 || k[..8] != prefix {
+                break; // past this contract's keys
+            }
+            let slot = u64::from_le_bytes(k[8..16].try_into().unwrap());
+            let val = u64::from_le_bytes(
+                v.as_ref()
+                    .try_into()
+                    .map_err(|_| StorageError::Corruption("contract storage value corrupt".into()))?,
+            );
+            map.insert(slot, val);
+        }
+        Ok(map)
+    }
+
+    /// Persist all storage slots for `contract_addr` atomically.
+    pub fn save_contract_storage(
+        &self,
+        contract_addr: u64,
+        storage: &std::collections::HashMap<u64, u64>,
+    ) -> Result<(), StorageError> {
+        let mut batch = WriteBatch::default();
+        let cf = self.cf(CF_CONTRACT_STORAGE)?;
+        for (&slot, &val) in storage {
+            let key = Self::contract_storage_key(contract_addr, slot);
+            batch.put_cf(cf, &key, &val.to_le_bytes());
+        }
+        self.db.write(batch)?;
+        Ok(())
+    }
+
+    // ── RVM contract bytecode (CF_CONTRACT_CODE) ─────────────────────────────
+
+    /// Persist the bytecode of a deployed contract.  Key = addr as 8-byte LE.
+    pub fn save_contract_code(&self, contract_addr: u64, bytecode: &[u8]) -> Result<(), StorageError> {
+        let key = contract_addr.to_le_bytes();
+        self.db.put_cf(self.cf(CF_CONTRACT_CODE)?, &key, bytecode)?;
+        Ok(())
+    }
+
+    /// Load bytecode for `contract_addr`, returning `None` if not deployed.
+    pub fn load_contract_code(&self, contract_addr: u64) -> Result<Option<Vec<u8>>, StorageError> {
+        let key = contract_addr.to_le_bytes();
+        Ok(self.db.get_cf(self.cf(CF_CONTRACT_CODE)?, &key)?)
     }
 
     // ── Raw meta key/value (for node-layer persistence) ──────────────────────

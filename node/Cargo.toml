@@ -16,7 +16,9 @@ rupeecoin-mempool    = { path = "../core/mempool" }
 rupeecoin-network    = { path = "../core/network" }
 rupeecoin-staking    = { path = "../core/staking" }
 rupeecoin-consensus  = { path = "../core/consensus" }
+rupeecoin-economics  = { path = "../core/economics" }
 rupeecoin-privacy    = { path = "../core/privacy" }
+rupeecoin-rvm        = { path = "../core/rvm" }
 rupeecoin-zkproof    = { path = "../core/zkproof" }
 tokio                = { workspace = true }
 anyhow               = { workspace = true }

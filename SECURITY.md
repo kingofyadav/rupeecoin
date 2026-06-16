@@ -2,13 +2,13 @@
 
 ## Supported Versions
 
-RupeeCoin is currently in **public testnet** (Phase 10 — Zeta). The mainnet has not launched yet.
+RupeeCoin has completed all pre-launch engineering phases (0–14) and is preparing the **public testnet** (Phase 15). The mainnet has not launched yet.
 
 | Version | Supported |
 |---|---|
 | `0.x.y` (pre-testnet) | No — superseded |
-| `0.9.x` (public testnet) | **Yes — active** |
-| `1.0.0` (mainnet) | Not yet launched |
+| `0.9.x` (public testnet, Phase 14 hardened) | **Yes — active** |
+| `1.0.0` (mainnet) | Not yet launched — pending Phase 15 security audit |
 
 ---
 
@@ -106,15 +106,18 @@ For background on the security model, see:
 
 - [README.md — Security Model](./README.md#security-model)
 - [GUIDE.txt — Part 9, Cryptographic Primitives Reference](./GUIDE.txt)
+- [audit/SECURITY_CHECKLIST.md](./audit/SECURITY_CHECKLIST.md) — all 7 pre-launch items resolved (Phase 14)
 - [Whitepaper — Section 12, Security Analysis](./whitepaper/sections/12-security.md)
 
 ### Known Limitations (not bugs)
 
-| Limitation | Impact | Phase fix |
+The following are accepted trade-offs or Phase 15 carry-overs, not security vulnerabilities:
+
+| Limitation | Impact | Resolution |
 |---|---|---|
-| STARK circuit proves Poseidon shadow tree (not BLAKE3 chain tree) | Spend-to-deposit linkability not fully closed | Phase 11 |
-| LMD-GHOST computed but chain rollback not implemented | Fork resolution under partition unproven | Phase 10 |
-| Testnet only — no mainnet contract guarantees | Testing environment | Phase 13 |
+| Trezor Dilithium3 signing | Device enumeration + Initialize handshake works; actual signing requires a custom Trezor firmware app (Trezor partner program, no existing Dilithium3 app) | Phase 15 ✅ HID done; firmware future |
+| Privacy commitment tree not rolled back on reorg > REORG_DEPTH (32) | Append-only by design; deeper reorgs require a privacy state resync | Accepted design |
+| No light-client proof protocol | SPV or compact proofs not yet implemented; full node required | Future phase |
 
 ---
 

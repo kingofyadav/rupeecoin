@@ -4,6 +4,10 @@ use rupeecoin_crypto::{leaf_hash, node_hash, Address, Hash};
 use rupeecoin_types::{Block, OutPoint, Transaction, TxOutput};
 use thiserror::Error;
 
+/// Coinbase outputs are locked for this many blocks after the block that
+/// created them.  Spending before maturity is rejected.
+pub const COINBASE_MATURITY: u64 = 100;
+
 #[derive(Error, Debug)]
 pub enum UtxoError {
     #[error("input not found in UTXO set: {0:?}")]
@@ -18,6 +22,8 @@ pub enum UtxoError {
     Expired { expiry: u64, height: u64 },
     #[error("invalid nonce: expected {expected}, got {got}")]
     InvalidNonce { expected: u64, got: u64 },
+    #[error("coinbase output not yet mature: spendable at block {available_at}, current height {current_height}")]
+    CoinbaseImmature { available_at: u64, current_height: u64 },
 }
 
 /// In-memory UTXO set with nonce tracking and state-root support.
@@ -26,6 +32,9 @@ pub struct UtxoSet {
     utxos: HashMap<OutPoint, TxOutput>,
     /// Per-address sequential nonce.  Incremented each time an address spends a UTXO.
     pub nonces: HashMap<Address, u64>,
+    /// Block height at which each coinbase output was created.
+    /// Used to enforce COINBASE_MATURITY before the output can be spent.
+    coinbase_heights: HashMap<OutPoint, u64>,
 }
 
 impl UtxoSet {
@@ -33,11 +42,37 @@ impl UtxoSet {
         UtxoSet {
             utxos: HashMap::new(),
             nonces: HashMap::new(),
+            coinbase_heights: HashMap::new(),
         }
     }
 
     pub fn get(&self, outpoint: &OutPoint) -> Option<&TxOutput> {
         self.utxos.get(outpoint)
+    }
+
+    /// Insert a UTXO directly — used by reorg rollback to restore spent outputs.
+    pub fn insert(&mut self, outpoint: OutPoint, output: TxOutput) {
+        self.utxos.insert(outpoint, output);
+    }
+
+    /// Remove a UTXO directly — used by reorg rollback to undo newly created outputs.
+    pub fn remove(&mut self, outpoint: &OutPoint) {
+        self.utxos.remove(outpoint);
+        self.coinbase_heights.remove(outpoint);
+    }
+
+    /// Remove a coinbase maturity record without removing the UTXO itself.
+    pub fn remove_coinbase_height(&mut self, outpoint: &OutPoint) {
+        self.coinbase_heights.remove(outpoint);
+    }
+
+    /// Decrement a nonce — used by reorg rollback to undo a spend.
+    pub fn decrement_nonce(&mut self, addr: &Address) {
+        if let Some(n) = self.nonces.get_mut(addr) {
+            if *n > 0 {
+                *n -= 1;
+            }
+        }
     }
 
     pub fn len(&self) -> usize {
@@ -70,6 +105,19 @@ impl UtxoSet {
                     expected,
                     got: tx.nonce,
                 });
+            }
+        }
+
+        // Coinbase maturity: reject spends of coinbase outputs before they mature.
+        for input in &tx.inputs {
+            if let Some(&lock_height) = self.coinbase_heights.get(&input.outpoint) {
+                let available_at = lock_height + COINBASE_MATURITY;
+                if current_height < available_at {
+                    return Err(UtxoError::CoinbaseImmature {
+                        available_at,
+                        current_height,
+                    });
+                }
             }
         }
 
@@ -110,21 +158,23 @@ impl UtxoSet {
 
     /// Apply a validated block: remove spent outputs, add new outputs, increment nonces.
     pub fn apply_block(&mut self, block: &Block) -> Result<(), UtxoError> {
-        for tx in &block.transactions {
+        let height = block.header.height;
+        for (tx_idx, tx) in block.transactions.iter().enumerate() {
+            let is_coinbase = tx_idx == 0 && tx.inputs.is_empty();
             for input in &tx.inputs {
                 self.utxos
                     .remove(&input.outpoint)
                     .ok_or_else(|| UtxoError::InputNotFound(input.outpoint.clone()))?;
+                // Remove maturity record when the output is spent.
+                self.coinbase_heights.remove(&input.outpoint);
             }
             let txid = tx.txid();
             for (vout, output) in tx.outputs.iter().enumerate() {
-                self.utxos.insert(
-                    OutPoint {
-                        txid,
-                        vout: vout as u32,
-                    },
-                    output.clone(),
-                );
+                let op = OutPoint { txid, vout: vout as u32 };
+                if is_coinbase {
+                    self.coinbase_heights.insert(op.clone(), height);
+                }
+                self.utxos.insert(op, output.clone());
             }
             // Increment sender nonce for non-coinbase transactions.
             if let Some(first_input) = tx.inputs.first() {
@@ -191,5 +241,128 @@ impl UtxoSet {
 impl Default for UtxoSet {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rupeecoin_crypto::KeyPair;
+    use rupeecoin_types::{Block, BlockHeader, Transaction, TxInput, TxOutput};
+
+    fn coinbase_tx(height: u64, recipient: rupeecoin_crypto::Address) -> Transaction {
+        Transaction {
+            version: 1,
+            chain_id: 1,
+            nonce: 0,
+            expiry: 0,
+            inputs: vec![],
+            outputs: vec![TxOutput { amount: 5_000_000_000, recipient }],
+            coinbase_data: Some(height.to_le_bytes().to_vec()),
+        }
+    }
+
+    fn dummy_block(height: u64, txs: Vec<Transaction>) -> Block {
+        Block {
+            header: BlockHeader {
+                version: 1,
+                prev_hash: rupeecoin_crypto::Hash::zero(),
+                merkle_root: rupeecoin_crypto::Hash::zero(),
+                timestamp: 0,
+                height,
+                slot: height,
+                proposer_index: 0,
+                privacy_root: rupeecoin_crypto::Hash::zero(),
+                base_fee: 1000,
+                gas_used: 0,
+                state_root: rupeecoin_crypto::Hash::zero(),
+                vrf_output: rupeecoin_crypto::Hash::zero(),
+            },
+            transactions: txs,
+            attestations: vec![],
+            proposer_signature: None,
+            privacy_txs: vec![],
+            vrf_proof: None,
+        }
+    }
+
+    #[test]
+    fn coinbase_immature_spend_rejected() {
+        let kp = KeyPair::generate();
+        let addr = kp.public_key.to_address();
+        let mut utxo_set = UtxoSet::new();
+
+        let cb = coinbase_tx(1, addr);
+        let block = dummy_block(1, vec![cb.clone()]);
+        utxo_set.apply_block(&block).unwrap();
+
+        let outpoint = rupeecoin_types::OutPoint { txid: cb.txid(), vout: 0 };
+        let spend = Transaction {
+            version: 1,
+            chain_id: 1,
+            nonce: 0,
+            expiry: 0,
+            inputs: vec![TxInput {
+                outpoint: outpoint.clone(),
+                public_key: kp.public_key.clone(),
+                signature: rupeecoin_crypto::Signature::empty(),
+            }],
+            outputs: vec![TxOutput { amount: 4_999_000_000, recipient: addr }],
+            coinbase_data: None,
+        };
+
+        // At height 50 (< 1 + 100 = 101), spend must be rejected.
+        let err = utxo_set.validate_transfer(&spend, 50).unwrap_err();
+        assert!(
+            matches!(err, UtxoError::CoinbaseImmature { available_at: 101, current_height: 50 }),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    #[test]
+    fn coinbase_mature_spend_accepted() {
+        let kp = KeyPair::generate();
+        let addr = kp.public_key.to_address();
+        let mut utxo_set = UtxoSet::new();
+
+        let cb = coinbase_tx(1, addr);
+        let block = dummy_block(1, vec![cb.clone()]);
+        utxo_set.apply_block(&block).unwrap();
+
+        let outpoint = rupeecoin_types::OutPoint { txid: cb.txid(), vout: 0 };
+        let sig_hash = {
+            let tmp = Transaction {
+                version: 1,
+                chain_id: 1,
+                nonce: 0,
+                expiry: 0,
+                inputs: vec![TxInput {
+                    outpoint: outpoint.clone(),
+                    public_key: kp.public_key.clone(),
+                    signature: rupeecoin_crypto::Signature::empty(),
+                }],
+                outputs: vec![TxOutput { amount: 4_999_000_000, recipient: addr }],
+                coinbase_data: None,
+            };
+            tmp.sig_hash()
+        };
+        let sig = kp.sign(sig_hash.as_bytes());
+
+        let spend = Transaction {
+            version: 1,
+            chain_id: 1,
+            nonce: 0,
+            expiry: 0,
+            inputs: vec![TxInput {
+                outpoint,
+                public_key: kp.public_key.clone(),
+                signature: sig,
+            }],
+            outputs: vec![TxOutput { amount: 4_999_000_000, recipient: addr }],
+            coinbase_data: None,
+        };
+
+        // At height 101 (= 1 + 100), spend must be accepted.
+        utxo_set.validate_transfer(&spend, 101).unwrap();
     }
 }

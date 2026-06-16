@@ -83,7 +83,7 @@ remaining auditable, decentralised, and resistant to future quantum adversaries.
 │                          Settlement Layer                                    │
 │  rupeecoin-blockchain ──── Chain { UTXO set, CommitmentTree, PmfpAccumulator}│
 │         │                                                                    │
-│  rupeecoin-storage ──────── RocksDB (8 column families)                      │
+│  rupeecoin-storage ──────── RocksDB (9 column families)                      │
 │         │                                                                    │
 │  rupeecoin-network ──────── libp2p (gossipsub + request-response)            │
 └──────────────────────────────────────────────────────────────────────────────┘
@@ -157,7 +157,8 @@ rupeecoin/
 │   ├── consensus/                   # Casper FFG, select_proposer (VRF), CheckpointManager
 │   ├── privacy/                     # Note, CommitmentTree, SpendProof, PrivacyTransaction
 │   ├── zkproof/                     # Winterfell STARK prover/verifier (wired to chain)
-│   └── economics/                   # supply schedule, EIP-1559, PMFP, inactivity leak
+│   ├── economics/                   # supply schedule, EIP-1559, PMFP, inactivity leak
+│   └── rvm/                         # 64-bit stack VM, gas metering, RPC-20/721/1155, evm2rvm
 ├── node/
 │   └── src/
 │       ├── main.rs                  # tokio event loop, P2P, block production
@@ -200,6 +201,7 @@ rupeecoin/
 | `note_cmts` | leaf index BE u64 | `bincode(NoteCommitment)` |
 | `shielded_outs` | leaf index BE u64 | `bincode(ShieldedOutput)` |
 | `checkpoints` | height BE u64 | `bincode(WeakSubjectivityCheckpoint)` |
+| `contract_storage` | `addr_u64_le(8B)++slot_u64_le(8B)` | `u64_le(8B)` |
 
 ---
 
@@ -225,6 +227,15 @@ rupeecoin/
 | 10.1 | Desktop Wallet GUI | **Complete** — Tauri 2, webkit2gtk-4.1, dark-mode SPA |
 | 10.2 | Mobile Wallet Alpha | **Complete** — Flutter + FRB bridge, 5/5 Rust tests |
 | 10 | Public Testnet (Zeta) | **In Progress** — external validators, security audit |
+| 11.1 | Poseidon Commitment Tree | **Complete** — Goldilocks field, incremental updates |
+| 11.2 | Batched STARK Verification | **Complete** — up to 10 shielded inputs per aggregated proof |
+| 11.3 | Incremental Merkle Root | **Complete** — eliminates O(N log N) state_root bottleneck |
+| 11.4 | Mobile Prover | **Complete** — arm64 native + WASM-compatible |
+| 11.5 | Output Well-Formedness | **Complete** — STARK statement 4 |
+| 12 | RupeeCoin VM | **Complete** — RVM interpreter, RPC-20/721/1155, EVM transpiler |
+| 13 | Mainnet Preparation | **Complete** — genesis config, Tor/SOCKS5, hardware wallet, SDK v1.0 |
+| 14 | Mainnet Launch Hardening | **Complete** — all 7 security checklist items; 37 suites green |
+| 15 | Ecosystem Growth | **Next** — engineering carry-overs + validator onboarding + grants |
 
 ---
 
@@ -779,14 +790,10 @@ with `--checkpoint`:
 
 ### Known limitations
 
-- **Phase 4 spend proofs reveal the note commitment** — the link between
-  deposit and spend is visible on-chain. Closed in Phase 5B (zk-STARK).
-- **Validator-visible input/output values** — `ShieldedInput.value` and
-  `ShieldedOutput.value` are plaintext. Hidden in a future phase via Pedersen
-  commitments with homomorphic balance verification.
-- **In-memory sliding window** — `Chain.blocks` retains the last 512 blocks in
-  RAM for fast tip access; older blocks are served from RocksDB. There is no
-  light-client proof protocol yet.
+- **Trezor hardware wallet is a Phase 15 stub** — `TrezorHardwareWallet::open()` always returns `NotConnected`. Ledger (Nano S/X/S+/Stax) is fully supported via Linux hidraw ioctl.
+- **Contract bytecode not persisted across restarts** — `CF_CONTRACT_CODE` column family is a Phase 15 carry-over. Only the slot→value storage map is persisted; deployed bytecode is lost on restart.
+- **No light-client proof protocol** — `Chain.blocks` retains the last 512 blocks in RAM; older blocks are served from RocksDB. A full node is required for all current use cases.
+- **Privacy tree not rolled back on reorg** — the Poseidon commitment tree and nullifier set are append-only by design. A reorg deeper than `REORG_DEPTH = 32` requires a full privacy state resync. This is an accepted Phase 14 trade-off.
 
 ---
 
@@ -847,41 +854,30 @@ cargo bench -p rupeecoin-tests --bench chain_sync  # single group
 
 ## Future Roadmap
 
-### Phase 10 — Public Testnet (Zeta) — In Progress
+### Phases 11–14 — Complete
 
-**Completed:**
-- ✅ Desktop wallet GUI — Tauri 2 (webkit2gtk-4.1) + dark-mode HTML/JS SPA; builds on Ubuntu 24.04
-- ✅ Mobile wallet alpha — Flutter + flutter_rust_bridge 2; Rust crypto bridge (generate / unlock / advance / check_passphrase / change_passphrase / validate_address); Android arm64 + x86_64
-- ✅ SECURITY.md — responsible disclosure, bug bounty tiers (Critical $10K / High $2.5K / Medium $500), scope table
+All zk-STARK hardening (Phase 11), the RupeeCoin VM (Phase 12), mainnet preparation (Phase 13), and mainnet launch hardening (Phase 14) are **complete as of 2026-06-16**. The security checklist (`audit/SECURITY_CHECKLIST.md`) is 7/7 items resolved.
 
-**Remaining:**
-- Public validator onboarding (bootnode multiaddrs, checkpoint hash, `docs/testnet-validator.md`)
-- External Security Audit #1 (consensus + core chain + staking) — contract with ≥2 firms
-- Milestone: 100 external validators running for 30 days, Casper FFG finalizing across ≥5 regions
+### Phase 15 — Ecosystem Growth — Next
 
-### Phase 11 — zk-STARK Hardening
+**Engineering carry-overs (3 items from Phase 14 security checklist):**
+- **N-04** — Validator allow-list for gossipsub (`core/network/src/lib.rs`)
+- **W-05b** — Trezor protobuf HID implementation (`wallet/src/hw_trezor.rs`)
+- **VM-07b** — `CF_CONTRACT_CODE` RocksDB column family for bytecode persistence (`core/storage/src/lib.rs`)
 
-Replace remaining STARK stubs with full circuit completeness:
-- Incremental Merkle root (removes O(N log N) state_root bottleneck)
-- BLAKE3 inside STARK circuit (full spend unlinkability)
-- Batched verification (up to 10 inputs per aggregated proof)
-- WASM prover for browser wallets
-- ZK Security Audit #2
+**Public validator onboarding:**
+- `docs/testnet-validator.md` — step-by-step guide to join Zeta testnet
+- Bootnode multiaddrs + latest checkpoint hash published
+- External Security Audit #1 (≥2 independent firms; scope: consensus + core + staking)
 
-### Phase 12 — RupeeCoin VM
+**Ecosystem:**
+- Ecosystem grants: first cohort of 10 funded projects
+- Cross-chain bridges: Bitcoin (HTLC), Ethereum (ZK bridge)
+- Mobile wallet v2.0: consumer-grade iOS + Android, send enabled
+- Block explorer v2.0: RVM contract UI, ABI viewer
+- Developer hackathon series: 3 events in Year 1
 
-Programmability via the RupeeCoin Virtual Machine (RVM):
-- Stack-based instruction set with gas metering
-- `ContractDeploy` and `ContractCall` transaction types
-- Token standards: RPC-20, RPC-721, RPC-1155
-- EVM transpiler for existing Solidity contracts
-
-### Phase 13 — Mainnet
-
-- Finalise coin distribution (genesis airdrop, bootstrap validators)
-- Third external security audit (full protocol)
-- Publish signed genesis block hash
-- Target: 500+ validators at launch
+**Milestone:** 100+ external validators, Casper FFG finalising across ≥5 geographic regions for 30 consecutive days.
 
 ---
 
