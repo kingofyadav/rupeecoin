@@ -17,6 +17,9 @@
   },
   "keywords": ["rupeecoin", "blockchain", "post-quantum", "sdk"],
   "license": "MIT",
+  "dependencies": {
+    "@noble/hashes": "^1.4.0"
+  },
   "devDependencies": {
     "typescript": "^5.4.0"
   },

@@ -52,13 +52,39 @@ impl CheckpointManager {
         self.trusted.last()
     }
 
-    /// Returns `true` if `height` is at or below the latest trusted checkpoint,
-    /// meaning block validation can be skipped for that height.
+    /// Returns `true` if `height` is strictly before the latest trusted checkpoint,
+    /// meaning full block validation can be skipped for that height.
     pub fn is_before_checkpoint(&self, height: u64) -> bool {
         self.trusted
             .last()
-            .map(|cp| height <= cp.height)
+            .map(|cp| height < cp.height)
             .unwrap_or(false)
+    }
+
+    /// Verify that a block at `height` matches the trusted checkpoint.
+    ///
+    /// Returns `Ok(())` if:
+    ///   - No checkpoint covers `height` (nothing to verify), or
+    ///   - `height` is strictly below the checkpoint (already trusted), or
+    ///   - `height` equals the checkpoint height and both `block_hash` and
+    ///     `state_root` match.
+    ///
+    /// Returns `Err(())` if `height` equals a checkpoint height but the hashes
+    /// do not match — indicating a chain fork or a tampered checkpoint.
+    pub fn verify_checkpoint_block(
+        &self,
+        height: u64,
+        block_hash: &Hash,
+        state_root: &Hash,
+    ) -> Result<(), ()> {
+        let Some(cp) = self.trusted.iter().find(|c| c.height == height) else {
+            return Ok(());
+        };
+        if &cp.block_hash == block_hash && &cp.state_root == state_root {
+            Ok(())
+        } else {
+            Err(())
+        }
     }
 
     /// Whether a checkpoint should be created at `height`.

@@ -18,6 +18,12 @@ pub enum UtxoError {
     InvalidSignature(usize),
     #[error("output sum exceeds input sum")]
     InsufficientFunds,
+    #[error("input value overflow: total inputs exceed u64::MAX")]
+    InputOverflow,
+    #[error("output value overflow: total outputs exceed u64::MAX")]
+    OutputOverflow,
+    #[error("all inputs in a transaction must share the same sender address")]
+    MultiSenderNotAllowed,
     #[error("transaction expired at block {expiry} (current height {height})")]
     Expired { expiry: u64, height: u64 },
     #[error("invalid nonce: expected {expected}, got {got}")]
@@ -96,9 +102,15 @@ impl UtxoSet {
             });
         }
 
-        // Nonce check: sender is the address of the first input's public key.
+        // All inputs must share the same sender address so the nonce model is
+        // unambiguous: one address → one nonce sequence.
         if let Some(first) = tx.inputs.first() {
             let sender = first.public_key.to_address();
+            for input in &tx.inputs {
+                if input.public_key.to_address() != sender {
+                    return Err(UtxoError::MultiSenderNotAllowed);
+                }
+            }
             let expected = self.nonces.get(&sender).copied().unwrap_or(0);
             if tx.nonce != expected {
                 return Err(UtxoError::InvalidNonce {
@@ -141,14 +153,14 @@ impl UtxoSet {
 
             input_sum = input_sum
                 .checked_add(utxo.amount)
-                .expect("input sum overflow");
+                .ok_or(UtxoError::InputOverflow)?;
         }
 
         let output_sum: u64 = tx
             .outputs
             .iter()
             .try_fold(0u64, |acc, o| acc.checked_add(o.amount))
-            .expect("output sum overflow");
+            .ok_or(UtxoError::OutputOverflow)?;
         if output_sum > input_sum {
             return Err(UtxoError::InsufficientFunds);
         }

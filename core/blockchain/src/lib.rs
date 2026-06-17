@@ -153,7 +153,15 @@ impl Chain {
         let delta = self.compute_delta(&block);
         self.utxo_set.apply_block(&block)?;
 
-        let computed = self.utxo_set.state_root();
+        // Pre-compute privacy apply so we can include the new tree root in the
+        // state root, without mutating committed state yet.
+        let height = block.header.height;
+        let apply = PrivacyBlockApply::compute(&block.privacy_txs, &self.commitment_tree, height);
+
+        let utxo_root = self.utxo_set.state_root();
+        let computed = hash_data(
+            &[utxo_root.as_bytes().as_slice(), apply.new_tree_root.as_bytes().as_slice()].concat(),
+        );
         if block.header.state_root != computed {
             // Undo the UTXO apply before returning the error.
             self.undo_utxo_delta(&delta);
@@ -161,8 +169,6 @@ impl Chain {
         }
 
         // ── Privacy ───────────────────────────────────────────────────────────
-        let height = block.header.height;
-        let apply = PrivacyBlockApply::compute(&block.privacy_txs, &self.commitment_tree, height);
         for cm in &apply.new_commitments {
             self.commitment_tree.append(*cm);
         }
@@ -425,19 +431,21 @@ impl Chain {
                     ));
                 }
                 let &proposer_addr = registry.active_set().get(idx).unwrap();
-                if let Some(proposer) = registry.get(&proposer_addr) {
-                    proposer
-                        .pubkey
-                        .verify(block.hash().as_bytes(), sig)
-                        .map_err(|_| ChainError::InvalidProposerSignature)?;
+                let proposer = registry
+                    .get(&proposer_addr)
+                    .ok_or(ChainError::InvalidProposerSignature)?;
 
-                    // vrf_proof must be present when validators are active.
-                    if block.vrf_proof.is_none() {
-                        return Err(ChainError::InvalidVrfProof(slot));
-                    }
-                    if !verify_block_vrf(block, &proposer.pubkey, &tip.header.vrf_output) {
-                        return Err(ChainError::InvalidVrfProof(slot));
-                    }
+                proposer
+                    .pubkey
+                    .verify(block.hash().as_bytes(), sig)
+                    .map_err(|_| ChainError::InvalidProposerSignature)?;
+
+                // vrf_proof must be present when validators are active.
+                if block.vrf_proof.is_none() {
+                    return Err(ChainError::InvalidVrfProof(slot));
+                }
+                if !verify_block_vrf(block, &proposer.pubkey, &tip.header.vrf_output) {
+                    return Err(ChainError::InvalidVrfProof(slot));
                 }
             } else {
                 // Bootstrap (no validators yet): vrf_output must equal
@@ -506,6 +514,11 @@ impl Chain {
                 sig_b,
                 ..
             } => {
+                if block_hash_a == block_hash_b {
+                    return Err(ChainError::InvalidSlashingReport(
+                        "double-proposal blocks must be distinct".into(),
+                    ));
+                }
                 proposer_pubkey
                     .verify(block_hash_a.as_bytes(), sig_a)
                     .map_err(|_| ChainError::InvalidSlashingReport("invalid sig_a".into()))?;
@@ -713,10 +726,18 @@ pub fn build_block(
     };
 
     // ── State root ────────────────────────────────────────────────────────────
+    // Combined: BLAKE3(utxo_root || post-privacy-tree-root) so the state root
+    // commits to both transparent and shielded pool state.
     let state_root = {
         let mut snap = chain.utxo_set.clone();
         snap.apply_transactions(&transactions);
-        snap.state_root()
+        let utxo_root = snap.state_root();
+        let future_apply =
+            PrivacyBlockApply::compute(&privacy_txs, &chain.commitment_tree, height);
+        hash_data(
+            &[utxo_root.as_bytes().as_slice(), future_apply.new_tree_root.as_bytes().as_slice()]
+                .concat(),
+        )
     };
 
     let header = BlockHeader {

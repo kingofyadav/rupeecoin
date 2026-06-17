@@ -53,8 +53,21 @@ pub fn build_transfer(
 /// Convert whole RPC coins to micro-RPC (the on-chain unit).
 ///
 /// `1 RPC = 100_000_000 micro-RPC`
+///
+/// Accepts up to 8 decimal places.  The input is split at the decimal point
+/// and reconstructed with integer arithmetic to avoid f64 precision loss
+/// (e.g. `0.1 * 1e8` ≠ `10_000_000` in f64).
 pub fn coins_to_micro(amount: f64) -> u64 {
-    (amount * rupeecoin_types::MICRO_RPC_PER_COIN as f64).round() as u64
+    // Work in integer arithmetic to prevent f64 rounding errors.
+    // Clamp negative to 0; split integer and fractional parts.
+    if amount < 0.0 {
+        return 0;
+    }
+    let per_coin = rupeecoin_types::MICRO_RPC_PER_COIN; // 100_000_000
+    let whole = amount.floor() as u64;
+    let frac_f = (amount - amount.floor()) * per_coin as f64;
+    let frac = frac_f.round() as u64;
+    whole.saturating_mul(per_coin).saturating_add(frac)
 }
 
 /// Convert micro-RPC to a human-readable coin string.

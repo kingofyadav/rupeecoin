@@ -20,6 +20,18 @@ use rupeecoin_types::MICRO_RPC_PER_COIN;
 
 use node_rpc::NodeRpc;
 
+/// Convert whole RPC coins to micro-RPC using integer arithmetic to avoid
+/// f64 precision loss (e.g. 0.1 × 1e8 ≠ 10_000_000 in f64).
+fn coins_to_micro(amount: f64) -> u64 {
+    if amount < 0.0 {
+        return 0;
+    }
+    let per_coin = MICRO_RPC_PER_COIN;
+    let whole = amount.floor() as u64;
+    let frac = ((amount - amount.floor()) * per_coin as f64).round() as u64;
+    whole.saturating_mul(per_coin).saturating_add(frac)
+}
+
 // ── CLI ───────────────────────────────────────────────────────────────────────
 
 #[derive(Parser)]
@@ -270,8 +282,8 @@ fn cmd_send(
         None => {}
     }
 
-    let amount_micro = (amount_rpc * MICRO_RPC_PER_COIN as f64) as u64;
-    let fee_micro = (fee_rpc * MICRO_RPC_PER_COIN as f64) as u64;
+    let amount_micro = coins_to_micro(amount_rpc);
+    let fee_micro = coins_to_micro(fee_rpc);
 
     let recipient = parse_payment_address(to_addr_input)?;
     let to_address = recipient.address;
@@ -507,7 +519,7 @@ fn cmd_sign_tx(
     let my_addr = kp.public_key.to_address();
     let my_addr_hex = hex::encode(my_addr.as_bytes());
 
-    let amount_micro = (amount_rpc * MICRO_RPC_PER_COIN as f64) as u64;
+    let amount_micro = coins_to_micro(amount_rpc);
 
     let rpc = NodeRpc::new(rpc_url);
     let utxos = rpc.get_utxos(&my_addr_hex)

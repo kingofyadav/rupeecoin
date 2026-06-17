@@ -2,13 +2,11 @@
  * Base58Check encode/decode for RupeeCoin addresses.
  *
  * Address format (mirrors rupeecoin_crypto::encode_address):
- *   version byte: 0x12
+ *   version byte: 0x52  ('R' for RupeeCoin)
  *   payload:      20-byte BLAKE3-derived address
- *   checksum:     first 4 bytes of SHA256(SHA256(version + payload))
- *
- * Note: We use SubtleCrypto (Web Crypto API) for SHA-256, so all
- * encode/decode functions are async.
+ *   checksum:     first 4 bytes of BLAKE3(BLAKE3(version + payload))
  */
+import { blake3 } from '@noble/hashes/blake3';
 
 const BASE58_ALPHABET =
   '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
@@ -60,31 +58,26 @@ function base58Decode(s: string): Uint8Array {
   return new Uint8Array(bytes);
 }
 
-async function sha256(data: Uint8Array): Promise<Uint8Array> {
-  const copy = new Uint8Array(data).buffer as ArrayBuffer;
-  const buf = await crypto.subtle.digest('SHA-256', copy);
-  return new Uint8Array(buf);
+/** Compute BLAKE3(BLAKE3(data))[0:4] — matches rupeecoin_crypto::encode_address. */
+function addressChecksum(payload: Uint8Array): Uint8Array {
+  const h1 = blake3(payload);
+  const h2 = blake3(h1);
+  return h2.slice(0, 4);
 }
 
-async function checksum(payload: Uint8Array): Promise<Uint8Array> {
-  const first = await sha256(payload);
-  const second = await sha256(first);
-  return second.slice(0, 4);
-}
-
-/** VERSION byte used for RupeeCoin transparent addresses. */
-const ADDRESS_VERSION = 0x12;
+/** VERSION byte: 'R' = 0x52 for RupeeCoin transparent addresses. */
+const ADDRESS_VERSION = 0x52;
 
 /**
  * Encode a 20-byte address to Base58Check string.
  * Equivalent to `rupeecoin_crypto::encode_address`.
  */
-export async function encodeAddress(addrBytes: Uint8Array): Promise<string> {
+export function encodeAddress(addrBytes: Uint8Array): string {
   if (addrBytes.length !== 20) throw new Error('Address must be 20 bytes');
   const payload = new Uint8Array(21);
   payload[0] = ADDRESS_VERSION;
   payload.set(addrBytes, 1);
-  const cs = await checksum(payload);
+  const cs = addressChecksum(payload);
   const full = new Uint8Array(25);
   full.set(payload);
   full.set(cs, 21);
@@ -95,12 +88,12 @@ export async function encodeAddress(addrBytes: Uint8Array): Promise<string> {
  * Decode a Base58Check address string to 20-byte Uint8Array.
  * Throws if version or checksum is invalid.
  */
-export async function decodeAddress(b58: string): Promise<Uint8Array> {
+export function decodeAddress(b58: string): Uint8Array {
   const full = base58Decode(b58);
   if (full.length !== 25) throw new Error('Invalid address length');
   if (full[0] !== ADDRESS_VERSION) throw new Error('Wrong address version');
   const payload = full.slice(0, 21);
-  const cs = await checksum(payload);
+  const cs = addressChecksum(payload);
   for (let i = 0; i < 4; i++) {
     if (full[21 + i] !== cs[i]) throw new Error('Address checksum mismatch');
   }
@@ -111,7 +104,7 @@ export async function decodeAddress(b58: string): Promise<Uint8Array> {
  * Parse an address from either Base58Check or 40-char hex.
  * Returns 20 raw bytes.
  */
-export async function parseAddress(s: string): Promise<Uint8Array> {
+export function parseAddress(s: string): Uint8Array {
   if (/^[0-9a-fA-F]{40}$/.test(s)) {
     const bytes = new Uint8Array(20);
     for (let i = 0; i < 20; i++) {
