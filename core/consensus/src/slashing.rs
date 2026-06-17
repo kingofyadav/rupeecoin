@@ -29,6 +29,10 @@ impl SlashingDetector {
         proposer_pubkey: PublicKey,
         signature: Signature,
     ) -> Option<SlashingEvidence> {
+        // Verify the signature is genuine before recording to prevent framing.
+        if proposer_pubkey.verify(block_hash.as_bytes(), &signature).is_err() {
+            return None;
+        }
         if let Some((prior_hash, prior_pubkey, prior_sig)) = self.seen_proposals.get(&slot) {
             if *prior_hash != block_hash && prior_pubkey == &proposer_pubkey {
                 return Some(SlashingEvidence::DoubleProposal {
@@ -51,6 +55,11 @@ impl SlashingDetector {
     /// Record an attestation.  Returns slashing evidence if the validator
     /// has already attested to a different block in the same slot.
     pub fn record_attestation(&mut self, att: Attestation) -> Option<SlashingEvidence> {
+        // Verify the attestation signature before recording.
+        let sd = Attestation::sig_data(att.slot, &att.block_hash);
+        if att.validator_pubkey.verify(sd.as_bytes(), &att.signature).is_err() {
+            return None;
+        }
         let addr = att.validator_pubkey.to_hash();
         let key = (att.slot, addr);
         if let Some(prior) = self.seen_attestations.get(&key) {

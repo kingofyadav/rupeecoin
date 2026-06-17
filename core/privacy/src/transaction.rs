@@ -210,9 +210,30 @@ impl PrivacyTransaction {
             }
         }
 
-        // Balance: sum(inputs) == sum(outputs) + fee
-        let total_in: u64 = self.shielded_inputs.iter().map(|i| i.value).sum();
-        let total_out: u64 = self.shielded_outputs.iter().map(|o| o.value).sum();
+        // Balance: sum(inputs) == sum(outputs) + fee.
+        // Use checked arithmetic with per-value cap to prevent wrapping overflow.
+        let total_in: u64 = self
+            .shielded_inputs
+            .iter()
+            .try_fold(0u64, |acc, i| {
+                if i.value == 0 || i.value > MAX_NOTE_VALUE {
+                    return None;
+                }
+                acc.checked_add(i.value)
+            })
+            .ok_or(PrivacyTxError::InvalidBalance)?;
+
+        let total_out: u64 = self
+            .shielded_outputs
+            .iter()
+            .try_fold(0u64, |acc, o| {
+                if o.value == 0 || o.value > MAX_NOTE_VALUE {
+                    return None;
+                }
+                acc.checked_add(o.value)
+            })
+            .ok_or(PrivacyTxError::InvalidBalance)?;
+
         let bp = BalanceProof {
             total_input: total_in,
             total_output: total_out,
@@ -221,6 +242,9 @@ impl PrivacyTransaction {
         if !bp.verify() {
             return Err(PrivacyTxError::InvalidBalance);
         }
+
+        // Verify batch STARK proof if present.
+        self.verify_batch_stark()?;
 
         Ok(())
     }
@@ -249,6 +273,9 @@ impl PrivacyTransaction {
             return Err(PrivacyTxError::InvalidSpendProof);
         }
 
+        rupeecoin_zkproof::verify_spend_batch(batch_proof)
+            .map_err(|_| PrivacyTxError::InvalidSpendProof)?;
+
         Ok(())
     }
 
@@ -264,6 +291,19 @@ impl PrivacyTransaction {
         if !known_roots.contains(&self.anchor) {
             return Err(PrivacyTxError::UnknownAnchor);
         }
+
+        // Verify the batch STARK proof's anchor matches this transaction's anchor.
+        if let Some(batch_proof) = &self.batch_stark_proof {
+            let mut buf = [0u8; 32];
+            for (i, &v) in batch_proof.anchor_felts.iter().enumerate() {
+                buf[i * 8..(i + 1) * 8].copy_from_slice(&v.to_le_bytes());
+            }
+            let proof_anchor = Hash::from_bytes(buf);
+            if proof_anchor != self.anchor {
+                return Err(PrivacyTxError::InvalidSpendProof);
+            }
+        }
+
         for input in &self.shielded_inputs {
             if spent_nullifiers.contains(&input.nullifier) {
                 return Err(PrivacyTxError::NullifierAlreadySpent(input.nullifier));
@@ -299,6 +339,11 @@ impl PrivacyBlockApply {
         let mut new_commitments = Vec::new();
 
         for tx in txs {
+            // Skip malformed transactions — the block validator should have
+            // rejected them before reaching here, but guard defensively.
+            if tx.validate_stateless().is_err() {
+                continue;
+            }
             for input in &tx.shielded_inputs {
                 new_nullifiers.push((input.nullifier, block_height));
             }
@@ -351,8 +396,16 @@ impl ShieldedTxBuilder {
 
     /// Finalise and return the transaction.  Returns `Err` if the balance is wrong.
     pub fn build(self) -> Result<PrivacyTransaction, PrivacyTxError> {
-        let total_input: u64 = self.inputs.iter().map(|i| i.value).sum();
-        let total_output: u64 = self.outputs.iter().map(|o| o.value).sum();
+        let total_input: u64 = self
+            .inputs
+            .iter()
+            .try_fold(0u64, |acc, i| acc.checked_add(i.value))
+            .ok_or(PrivacyTxError::InvalidBalance)?;
+        let total_output: u64 = self
+            .outputs
+            .iter()
+            .try_fold(0u64, |acc, o| acc.checked_add(o.value))
+            .ok_or(PrivacyTxError::InvalidBalance)?;
 
         let balance_proof = BalanceProof {
             total_input,

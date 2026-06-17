@@ -131,10 +131,15 @@ pub struct ValidatorInfo {
 }
 
 impl ValidatorInfo {
-    /// Effective weight = stake * contribution_multiplier (scaled ×1000 to avoid floats).
+    /// Effective weight = stake × contribution_multiplier.
+    ///
+    /// The multiplier is computed in f64 (acceptable: always in [0.5, 1.5] with
+    /// limited precision), then scaled ×1000 and converted to u64.  The final
+    /// multiplication uses u128 to avoid precision loss for large stakes
+    /// (stakes up to ~18 × 10^18 micro-RPC fit in u128 × 1500 / 1000).
     pub fn effective_weight(&self) -> u64 {
-        let mult = self.contribution.multiplier();
-        (self.stake as f64 * mult) as u64
+        let mult_1000 = (self.contribution.multiplier() * 1000.0).round() as u64;
+        ((self.stake as u128 * mult_1000 as u128) / 1000) as u64
     }
 }
 

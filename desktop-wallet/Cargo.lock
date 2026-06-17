@@ -2713,7 +2713,7 @@ dependencies = [
 
 [[package]]
 name = "rupeecoin-crypto"
-version = "0.3.0"
+version = "1.0.0"
 dependencies = [
  "bincode",
  "blake3",
@@ -2728,7 +2728,7 @@ dependencies = [
 
 [[package]]
 name = "rupeecoin-desktop-wallet"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "argon2",
@@ -2748,7 +2748,7 @@ dependencies = [
 
 [[package]]
 name = "rupeecoin-privacy"
-version = "0.3.0"
+version = "1.0.0"
 dependencies = [
  "bincode",
  "blake3",
@@ -2764,7 +2764,7 @@ dependencies = [
 
 [[package]]
 name = "rupeecoin-sdk"
-version = "0.3.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "bincode",
@@ -2782,19 +2782,20 @@ dependencies = [
 
 [[package]]
 name = "rupeecoin-types"
-version = "0.3.0"
+version = "1.0.0"
 dependencies = [
  "bincode",
  "hex",
  "rupeecoin-crypto",
  "rupeecoin-privacy",
  "serde",
+ "serde_json",
  "thiserror 1.0.69",
 ]
 
 [[package]]
 name = "rupeecoin-zkproof"
-version = "0.3.0"
+version = "1.0.0"
 dependencies = [
  "bincode",
  "blake3",

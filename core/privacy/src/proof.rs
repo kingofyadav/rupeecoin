@@ -236,7 +236,7 @@ impl StarkProofPlaceholder {
         }
     }
     pub fn verify(&self) -> bool {
-        true
+        false
     }
 }
 
@@ -259,6 +259,8 @@ pub struct BalanceProof {
 
 impl BalanceProof {
     pub fn verify(&self) -> bool {
-        self.total_input == self.total_output.saturating_add(self.fee)
+        self.total_output
+            .checked_add(self.fee)
+            .map_or(false, |rhs| self.total_input == rhs)
     }
 }

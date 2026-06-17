@@ -102,9 +102,14 @@ fn state_root_is_committed_in_header() {
     let claimed = block.header.state_root;
     chain.add_block(block, &mut registry).unwrap();
 
-    // After applying the block, the chain's UTXO set state root must match
-    // what the block header committed.
-    assert_eq!(chain.utxo_set.state_root(), claimed);
+    // State root = BLAKE3(utxo_root || commitment_tree_root) — verifies both
+    // transparent and shielded pool state are committed in the block header.
+    let utxo_root = chain.utxo_set.state_root();
+    let privacy_root = chain.commitment_tree.root();
+    let combined = rupeecoin_crypto::hash_data(
+        &[utxo_root.as_bytes().as_slice(), privacy_root.as_bytes().as_slice()].concat(),
+    );
+    assert_eq!(combined, claimed);
 }
 
 #[test]

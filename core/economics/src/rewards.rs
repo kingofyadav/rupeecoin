@@ -100,8 +100,10 @@ pub fn compute_block_rewards(
     }
 
     // Dust correction: any rounding remainder goes to the proposer.
-    let proposer_reward =
-        proposer_reward.saturating_add(distributable.saturating_sub(proposer_reward + credited_sum));
+    // Use saturating_add to prevent overflow when summing proposer + credits.
+    let total_distributed = proposer_reward.saturating_add(credited_sum);
+    let dust = distributable.saturating_sub(total_distributed);
+    let proposer_reward = proposer_reward.saturating_add(dust);
 
     BlockRewardSplit {
         proposer_reward,
