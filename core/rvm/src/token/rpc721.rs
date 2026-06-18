@@ -3,6 +3,7 @@
 /// Storage layout
 /// ───────────────
 ///  slot 0                : total_minted (monotonically increasing token ID counter)
+///  OWNER_SLOT            : contract deployer/owner address (set at init time)
 ///  owner_slot(token_id)  : owner address of token `token_id` (0 = unminted/burned)
 ///
 /// ABI
@@ -12,8 +13,14 @@
 ///  transfer(to: u64, token_id: u64)   → 1
 ///  burn(token_id: u64)                → 1
 ///  totalMinted()                      → u64
+use std::collections::HashMap;
+
 use crate::assemble::Assembler;
 use crate::opcode::Op;
+
+/// Storage slot reserved for the contract deployer/owner address.
+/// Uses u64::MAX to avoid collision with token-ID-derived slots.
+pub const OWNER_SLOT: u64 = u64::MAX;
 
 pub const SEL_MINT:         u64 = 0xaaaa_bbbb_1111_0001;
 pub const SEL_OWNER_OF:     u64 = 0xaaaa_bbbb_1111_0002;
@@ -34,10 +41,13 @@ pub fn rpc721_bytecode() -> Vec<u8> {
     a.push8(0).push8(0).op(Op::Revert);
 
     // ── mint(to) → token_id ───────────────────────────────────────────────
-    // Only the contract deployer (self) can mint; for simplicity we skip
-    // the auth check in Phase 12 (node layer enforces mint authority).
+    // H-24: only the contract owner (stored at OWNER_SLOT) may mint.
     a.label("mint");
-    a.op(Op::Pop);
+    a.op(Op::Pop);                                   // drop selector; stack=[]
+    // auth check: caller must equal storage[OWNER_SLOT]
+    a.push8(OWNER_SLOT).op(Op::SLoad);              // [contract_owner]
+    a.op(Op::Caller).op(Op::Eq).op(Op::IsZero);    // 1 if caller != owner
+    a.push_label("mint_revert").op(Op::JumpI);       // revert if unauthorized
     a.push8(8).op(Op::MLoad);   // to
     // new_id = storage[0] + 1
     a.push8(0).op(Op::SLoad).push8(1).op(Op::Add); // new_id
@@ -81,6 +91,9 @@ pub fn rpc721_bytecode() -> Vec<u8> {
     a.push8(1).push8(0).op(Op::MStore);
     a.push8(8).push8(0).op(Op::Return);
 
+    a.label("mint_revert");
+    a.push8(0).push8(0).op(Op::Revert);
+
     a.label("transfer721_revert");
     a.push8(0).push8(0).op(Op::Revert);
 
@@ -106,5 +119,14 @@ pub fn rpc721_bytecode() -> Vec<u8> {
     a.push8(0).op(Op::MStore);
     a.push8(8).push8(0).op(Op::Return);
 
-    a.build()
+    a.build().expect("all labels defined in rpc721_bytecode")
+}
+
+/// Populate initial storage for a freshly deployed RPC-721 contract.
+/// Must be called before any `mint` — sets the contract owner slot.
+pub fn rpc721_init_storage(owner: u64) -> HashMap<u64, u64> {
+    let mut s = HashMap::new();
+    s.insert(0, 0u64);          // total_minted = 0
+    s.insert(OWNER_SLOT, owner);
+    s
 }

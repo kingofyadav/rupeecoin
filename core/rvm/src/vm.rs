@@ -199,11 +199,14 @@ fn find_jumpdests(code: &[u8]) -> HashSet<usize> {
 }
 
 /// Run `bytecode` to completion, returning the final result.
+///
+/// The second element of the Ok tuple is `Some(storage)` on normal return/stop,
+/// or `None` on `Revert` — callers must check for `None` before updating storage.
 pub fn run(
     bytecode: &[u8],
     storage: HashMap<u64, u64>,
     ctx: ExecContext,
-) -> Result<(ExecResult, HashMap<u64, u64>), VmError> {
+) -> Result<(ExecResult, Option<HashMap<u64, u64>>), VmError> {
     run_inner(bytecode, storage, ctx, false)
 }
 
@@ -211,7 +214,7 @@ pub fn static_call(
     bytecode: &[u8],
     storage: HashMap<u64, u64>,
     ctx: ExecContext,
-) -> Result<(ExecResult, HashMap<u64, u64>), VmError> {
+) -> Result<(ExecResult, Option<HashMap<u64, u64>>), VmError> {
     run_inner(bytecode, storage, ctx, true)
 }
 
@@ -220,7 +223,7 @@ fn run_inner(
     storage: HashMap<u64, u64>,
     ctx: ExecContext,
     is_static: bool,
-) -> Result<(ExecResult, HashMap<u64, u64>), VmError> {
+) -> Result<(ExecResult, Option<HashMap<u64, u64>>), VmError> {
     let gas_limit = ctx.gas_limit;
     let mut s = VmState::new(bytecode, storage, ctx, is_static);
 
@@ -229,7 +232,7 @@ fn run_inner(
             // implicit STOP
             let gas_used = gas_limit - s.gas;
             let storage = s.storage;
-            return Ok((ExecResult::Return { data: vec![], gas_used }, storage));
+            return Ok((ExecResult::Return { data: vec![], gas_used }, Some(storage)));
         }
 
         let raw = bytecode[s.pc];
@@ -242,7 +245,7 @@ fn run_inner(
             Op::Stop => {
                 let gas_used = gas_limit - s.gas;
                 let storage = s.storage;
-                return Ok((ExecResult::Return { data: vec![], gas_used }, storage));
+                return Ok((ExecResult::Return { data: vec![], gas_used }, Some(storage)));
             }
 
             // ── arithmetic ────────────────────────────────────────────────
@@ -287,22 +290,34 @@ fn run_inner(
                 // charge extra: 5 gas per byte of exponent (simplified)
                 let exp_bytes = if exp == 0 { 0 } else { 8 - (exp.leading_zeros() / 8) as u64 };
                 s.charge(5 * exp_bytes)?;
-                s.push(base.wrapping_pow(exp as u32), raw)?;
+                // H-21: exp > u32::MAX silently truncated in wrapping_pow; result is 0 per EVM spec
+                let result = if exp > u32::MAX as u64 { 0u64 } else { base.wrapping_pow(exp as u32) };
+                s.push(result, raw)?;
             }
             Op::AddOv => {
                 let (a, b) = (s.pop(raw)?, s.pop(raw)?);
+                // H-20: after two pops we push two values; check room for both before first push
+                if s.stack.len() + 2 > STACK_LIMIT {
+                    return Err(VmError::StackOverflow);
+                }
                 let (result, overflow) = a.overflowing_add(b);
                 s.push(result, raw)?;
                 s.push(overflow as u64, raw)?;
             }
             Op::SubOv => {
                 let (a, b) = (s.pop(raw)?, s.pop(raw)?);
+                if s.stack.len() + 2 > STACK_LIMIT {
+                    return Err(VmError::StackOverflow);
+                }
                 let (result, overflow) = a.overflowing_sub(b);
                 s.push(result, raw)?;
                 s.push(overflow as u64, raw)?;
             }
             Op::MulOv => {
                 let (a, b) = (s.pop(raw)?, s.pop(raw)?);
+                if s.stack.len() + 2 > STACK_LIMIT {
+                    return Err(VmError::StackOverflow);
+                }
                 let (result, overflow) = a.overflowing_mul(b);
                 s.push(result, raw)?;
                 s.push(overflow as u64, raw)?;
@@ -323,7 +338,8 @@ fn run_inner(
             Op::Shr    => { let (shift, val) = (s.pop(raw)?, s.pop(raw)?); s.push(if shift >= 64 { 0 } else { val >> shift }, raw)?; }
             Op::Sar    => {
                 let (shift, val) = (s.pop(raw)?, s.pop(raw)? as i64);
-                let result = if shift >= 63 { val >> 63 } else { val >> shift };
+                // H-22: threshold must be 64 (not 63); SAR by 63 is a valid shift
+                let result = if shift >= 64 { val >> 63 } else { val >> shift };
                 s.push(result as u64, raw)?;
             }
 
@@ -464,6 +480,10 @@ fn run_inner(
 
             // ── logging ───────────────────────────────────────────────────
             Op::Log0 | Op::Log1 | Op::Log2 | Op::Log3 | Op::Log4 => {
+                // M-09: LOG is a state-observing write; forbidden in static context
+                if s.is_static {
+                    return Err(VmError::WriteProtection);
+                }
                 let topic_count = (raw - 0xA0) as usize;
                 let (offset, len) = (s.pop(raw)? as usize, s.pop(raw)? as usize);
                 // charge 8 per data byte
@@ -486,14 +506,14 @@ fn run_inner(
                 let data = s.mem_slice(offset, len)?;
                 let gas_used = gas_limit - s.gas;
                 let storage = s.storage;
-                return Ok((ExecResult::Return { data, gas_used }, storage));
+                return Ok((ExecResult::Return { data, gas_used }, Some(storage)));
             }
             Op::Revert => {
                 let (offset, len) = (s.pop(raw)? as usize, s.pop(raw)? as usize);
                 let data = s.mem_slice(offset, len)?;
                 let gas_used = gas_limit - s.gas;
-                // Revert: do NOT persist storage changes
-                return Ok((ExecResult::Revert { data, gas_used }, HashMap::new()));
+                // Revert: return None so callers cannot accidentally apply storage changes.
+                return Ok((ExecResult::Revert { data, gas_used }, None));
             }
 
             // CREATE / CALL stubs — not implemented in the interpreter layer;

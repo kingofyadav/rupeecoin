@@ -41,6 +41,10 @@ struct Cli {
     #[arg(long, default_value = "8081")]
     port: u16,
 
+    /// IP address to bind. Defaults to 127.0.0.1 (loopback only).
+    #[arg(long, default_value = "127.0.0.1")]
+    bind: IpAddr,
+
     /// Node RPC base URL.
     #[arg(long, default_value = "http://127.0.0.1:9944")]
     node_rpc: String,
@@ -138,6 +142,7 @@ struct FaucetConfig {
 struct FaucetMutable {
     nonce: u64,
     rate_limits: HashMap<IpAddr, u64>,
+    addr_limits: HashMap<[u8; 20], u64>,
     total_drips: u64,
 }
 
@@ -200,7 +205,8 @@ fn build_drip_tx(
             break;
         }
         selected.push(utxo);
-        total_in = total_in.saturating_add(utxo.amount_micro);
+        total_in = total_in.checked_add(utxo.amount_micro)
+            .ok_or_else(|| anyhow!("faucet balance overflow during coin selection"))?;
     }
 
     if total_in < needed {
@@ -311,30 +317,56 @@ async fn handler_drip(
             );
         }
     };
+    let addr_key = recipient.0;
 
-    // Acquire the exclusive lock for the full drip to prevent nonce races.
-    let mut m = f.mutable.lock().await;
+    // Check rate limits and grab nonce under the lock, then release before I/O.
+    let nonce = {
+        let m = f.mutable.lock().await;
 
-    // Rate-limit: one drip per IP per cooldown window.
-    if let Some(&last) = m.rate_limits.get(&ip) {
-        let elapsed = now.saturating_sub(last);
-        if elapsed < f.config.cooldown_secs {
-            let retry_in = f.config.cooldown_secs - elapsed;
-            warn!("Rate limit for {ip}: retry in {retry_in}s");
-            return (
-                StatusCode::TOO_MANY_REQUESTS,
-                Json(DripResponse {
-                    txid: None,
-                    error: Some(format!(
-                        "Rate limit: one drip per {} hours. Try again in {} minutes.",
-                        f.config.cooldown_secs / 3600,
-                        retry_in / 60 + 1,
-                    )),
-                    retry_after_secs: Some(retry_in),
-                }),
-            );
+        // Rate-limit: one drip per IP per cooldown window.
+        if let Some(&last) = m.rate_limits.get(&ip) {
+            let elapsed = now.saturating_sub(last);
+            if elapsed < f.config.cooldown_secs {
+                let retry_in = f.config.cooldown_secs - elapsed;
+                warn!("Rate limit for {ip}: retry in {retry_in}s");
+                return (
+                    StatusCode::TOO_MANY_REQUESTS,
+                    Json(DripResponse {
+                        txid: None,
+                        error: Some(format!(
+                            "Rate limit: one drip per {} hours. Try again in {} minutes.",
+                            f.config.cooldown_secs / 3600,
+                            retry_in / 60 + 1,
+                        )),
+                        retry_after_secs: Some(retry_in),
+                    }),
+                );
+            }
         }
-    }
+
+        // Rate-limit: one drip per recipient address per cooldown window.
+        if let Some(&last) = m.addr_limits.get(&addr_key) {
+            let elapsed = now.saturating_sub(last);
+            if elapsed < f.config.cooldown_secs {
+                let retry_in = f.config.cooldown_secs - elapsed;
+                warn!("Rate limit for address {}: retry in {retry_in}s", req.address);
+                return (
+                    StatusCode::TOO_MANY_REQUESTS,
+                    Json(DripResponse {
+                        txid: None,
+                        error: Some(format!(
+                            "Rate limit: one drip per address per {} hours. Try again in {} minutes.",
+                            f.config.cooldown_secs / 3600,
+                            retry_in / 60 + 1,
+                        )),
+                        retry_after_secs: Some(retry_in),
+                    }),
+                );
+            }
+        }
+
+        m.nonce
+    }; // lock released here — network I/O happens without holding it
 
     // Fetch the faucet's current UTXOs from the node (blocking I/O in threadpool).
     let node_rpc = f.config.node_rpc.clone();
@@ -374,7 +406,7 @@ async fn handler_drip(
         recipient,
         f.config.address,
         f.config.chain_id,
-        m.nonce,
+        nonce,
         f.config.drip_amount_micro,
         f.config.fee_micro,
     ) {
@@ -427,23 +459,27 @@ async fn handler_drip(
         );
     }
 
-    // Commit state: nonce, rate limit, total count, persisted keyfile.
-    m.nonce += 1;
-    m.total_drips += 1;
-    m.rate_limits.insert(ip, now);
+    // Commit state: nonce, rate limits, total count, persisted keyfile.
+    {
+        let mut m = f.mutable.lock().await;
+        m.nonce += 1;
+        m.total_drips += 1;
+        m.rate_limits.insert(ip, now);
+        m.addr_limits.insert(addr_key, now);
 
-    if let Err(e) = save_keyfile(&f.config.keyfile_path, &f.config.seed, m.nonce) {
-        // Non-fatal: log the error but don't fail the drip that already submitted.
-        error!("Failed to persist keyfile (nonce may drift on restart): {e}");
+        if let Err(e) = save_keyfile(&f.config.keyfile_path, &f.config.seed, m.nonce) {
+            // Non-fatal: log the error but don't fail the drip that already submitted.
+            error!("Failed to persist keyfile (nonce may drift on restart): {e}");
+        }
+
+        info!(
+            "Drip #{} → {} txid={}…  nonce_now={}",
+            m.total_drips,
+            req.address,
+            &txid[..12],
+            m.nonce
+        );
     }
-
-    info!(
-        "Drip #{} → {} txid={}…  nonce_now={}",
-        m.total_drips,
-        req.address,
-        &txid[..12],
-        m.nonce
-    );
 
     (
         StatusCode::OK,
@@ -459,7 +495,8 @@ async fn handler_drip(
 struct StatsResponse {
     faucet_address: String,
     balance_micro: u64,
-    balance_rpc: f64,
+    /// Whole-coin part of balance (integer, no float).
+    balance_rpc_whole: u64,
     drip_amount_rpc: u64,
     total_drips: u64,
     network: String,
@@ -482,7 +519,7 @@ async fn handler_stats(State(f): State<SharedFaucet>) -> impl IntoResponse {
     Json(StatsResponse {
         faucet_address: f.config.address_b58.clone(),
         balance_micro,
-        balance_rpc: balance_micro as f64 / MICRO_RPC_PER_COIN as f64,
+        balance_rpc_whole: balance_micro / MICRO_RPC_PER_COIN,
         drip_amount_rpc: f.config.drip_amount_micro / MICRO_RPC_PER_COIN,
         total_drips,
         network: f.config.network.clone(),
@@ -592,7 +629,7 @@ async function loadStats() {{
     if (!r.ok) return;
     const d = await r.json();
     document.getElementById('balance').textContent =
-      d.balance_rpc.toFixed(4) + ' RPC';
+      d.balance_rpc_whole + ' RPC';
     document.getElementById('total-drips').textContent =
       d.total_drips.toLocaleString();
   }} catch (_) {{}}
@@ -612,9 +649,14 @@ async function doDrip() {{
     }});
     const d = await resp.json();
     if (d.txid) {{
-      showResult(true,
-        '✓ Sent {drip_rpc} RPC to your address!<br>' +
-        '<span class="txid-label">txid: ' + d.txid + '</span>');
+      const box = document.getElementById('result-box');
+      box.className = 'result ok';
+      box.innerHTML = '✓ Sent {drip_rpc} RPC to your address!<br>';
+      const txidEl = document.createElement('span');
+      txidEl.className = 'txid-label';
+      txidEl.textContent = 'txid: ' + d.txid;
+      box.appendChild(txidEl);
+      box.style.display = 'block';
       loadStats();
     }} else {{
       showResult(false, d.error || 'Unknown error');
@@ -691,6 +733,7 @@ async fn main() -> Result<()> {
         mutable: tokio::sync::Mutex::new(FaucetMutable {
             nonce,
             rate_limits: HashMap::new(),
+            addr_limits: HashMap::new(),
             total_drips: 0,
         }),
     });
@@ -701,7 +744,7 @@ async fn main() -> Result<()> {
         .route("/api/stats", get(handler_stats))
         .with_state(faucet);
 
-    let bind = SocketAddr::from(([127, 0, 0, 1], cli.port));
+    let bind = SocketAddr::new(cli.bind, cli.port);
     info!("Faucet listening on http://{bind}");
     let listener = tokio::net::TcpListener::bind(bind).await?;
 

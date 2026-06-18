@@ -120,12 +120,13 @@ impl MockHardwareWallet {
         MockHardwareWallet { master: HdNode::master(master_seed) }
     }
 
-    fn derive_keypair(&self, path: &DerivationPath) -> KeyPair {
+    fn derive_keypair(&self, path: &DerivationPath) -> Result<KeyPair, HwError> {
         let mut node = self.master.clone();
         for &idx in &path.indices {
-            node = node.child(idx);
+            node = node.child(idx)
+                .map_err(|_| HwError::UnsupportedPath(format!("depth overflow at index {idx}")))?;
         }
-        node.to_keypair()
+        Ok(node.to_keypair())
     }
 }
 
@@ -135,12 +136,12 @@ impl HardwareWallet for MockHardwareWallet {
     }
 
     fn get_public_key(&self, path: &DerivationPath) -> Result<Vec<u8>, HwError> {
-        let kp = self.derive_keypair(path);
+        let kp = self.derive_keypair(path)?;
         Ok(kp.public_key.as_bytes().to_vec())
     }
 
     fn sign(&self, data: &[u8], path: &DerivationPath) -> Result<Signature, HwError> {
-        let kp = self.derive_keypair(path);
+        let kp = self.derive_keypair(path)?;
         Ok(kp.sign(data))
     }
 
@@ -176,7 +177,7 @@ mod tests {
         // Derive the keypair manually and verify.
         let seed = test_seed();
         let master = HdNode::master(&seed);
-        let kp = master.child(HD_RECEIVE).child(0).to_keypair();
+        let kp = master.child(HD_RECEIVE).unwrap().child(0).unwrap().to_keypair();
         kp.public_key.verify(message, &sig).expect("signature should verify");
     }
 

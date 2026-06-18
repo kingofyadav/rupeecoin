@@ -41,11 +41,14 @@ pub fn scan(
                 // Verify commitment matches (guards against a malicious node).
                 if note.commitment() == commitment {
                     let nullifier = note.nullifier(nk);
-                    // Skip notes already spent on-chain.
+                    // Skip notes already spent on-chain; skip with warning on check failure.
                     match rpc.is_nullifier_spent(&nullifier) {
                         Ok(true) => continue,
                         Ok(false) => {}
-                        Err(_) => {} // if check fails, include the note and let the node reject
+                        Err(e) => {
+                            eprintln!("warning: nullifier check failed for note {index}: {e}; skipping");
+                            continue;
+                        }
                     }
                     owned.push(OwnedNote {
                         index,
@@ -64,7 +67,8 @@ pub fn scan(
 
 /// From a list of owned notes, select enough to cover `target_micro_rpc`.
 ///
-/// Returns the selected notes and the change amount (in micro-RPC).
+/// Notes are selected ascending by value (smallest first) to minimise note
+/// count.  Returns the selected notes and the change amount (in micro-RPC).
 pub fn select_notes(
     notes: &[OwnedNote],
     target_micro_rpc: u64,
@@ -73,11 +77,12 @@ pub fn select_notes(
     let need = target_micro_rpc.checked_add(fee_micro_rpc)?;
     let mut total = 0u64;
     let mut end = 0;
+    // notes must already be sorted ascending; caller is responsible.
     for note in notes {
         if total >= need {
             break;
         }
-        total += note.note.value;
+        total = total.checked_add(note.note.value)?;
         end += 1;
     }
     if total >= need {

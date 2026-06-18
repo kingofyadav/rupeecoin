@@ -83,8 +83,10 @@ pub fn save(path: &str, inner: &KeystoreInner, passphrase: &str) -> Result<(), S
         nonce_hex: hex::encode(nonce_bytes),
         ciphertext_hex: hex::encode(ct),
     };
-    std::fs::write(path, serde_json::to_string_pretty(&ks).map_err(|e| e.to_string())?)
-        .map_err(|e| e.to_string())
+    let json = serde_json::to_string_pretty(&ks).map_err(|e| e.to_string())?;
+    let tmp = format!("{path}.tmp");
+    std::fs::write(&tmp, &json).map_err(|e| format!("write tmp keystore: {e}"))?;
+    std::fs::rename(&tmp, path).map_err(|e| format!("rename keystore: {e}"))
 }
 
 /// Load and decrypt a keystore from `path`.

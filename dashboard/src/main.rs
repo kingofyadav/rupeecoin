@@ -5,6 +5,7 @@ use std::io::{self, stdout};
 use std::time::{Duration, Instant};
 
 use clap::Parser;
+use rupeecoin_crypto::decode_address;
 use crossterm::{
     event::{self, Event, KeyCode, KeyEventKind},
     execute,
@@ -112,11 +113,17 @@ impl App {
         }
 
         if let Some(addr) = &self.addr.clone() {
-            let url = format!("{}/rpc/validator_info?addr={}", self.rpc, addr);
-            if let Ok(resp) = ureq::get(&url).timeout(Duration::from_secs(3)).call() {
-                if let Ok(v) = resp.into_json::<ValidatorInfoResp>() {
-                    self.validator = Some(v);
+            let is_valid = (addr.len() == 40 && addr.chars().all(|c| c.is_ascii_hexdigit()))
+                || decode_address(addr).is_ok();
+            if is_valid {
+                let url = format!("{}/rpc/validator_info?addr={}", self.rpc, addr);
+                if let Ok(resp) = ureq::get(&url).timeout(Duration::from_secs(3)).call() {
+                    if let Ok(v) = resp.into_json::<ValidatorInfoResp>() {
+                        self.validator = Some(v);
+                    }
                 }
+            } else {
+                self.error = Some(format!("invalid address format: {addr}"));
             }
         }
     }

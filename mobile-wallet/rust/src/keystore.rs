@@ -73,7 +73,10 @@ pub fn save(path: &str, inner: &KeystoreInner, passphrase: &str) -> Result<(), S
         ciphertext_hex: hex::encode(ct),
     };
     let json = serde_json::to_string_pretty(&ks).map_err(|e| e.to_string())?;
-    std::fs::write(path, json).map_err(|e| format!("write keystore: {e}"))
+    // Atomic write: write to a temp file then rename to prevent partial writes.
+    let tmp = format!("{path}.tmp");
+    std::fs::write(&tmp, &json).map_err(|e| format!("write keystore tmp: {e}"))?;
+    std::fs::rename(&tmp, path).map_err(|e| format!("rename keystore: {e}"))
 }
 
 pub fn load(path: &str, passphrase: &str) -> Result<KeystoreInner, String> {

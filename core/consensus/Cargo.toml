@@ -9,3 +9,4 @@ rupeecoin-types   = { path = "../types" }
 rupeecoin-staking = { path = "../staking" }
 thiserror         = { workspace = true }
 serde             = { workspace = true }
+tracing           = { workspace = true }

@@ -3,12 +3,17 @@
 //! All methods are synchronous (blocking ureq calls).  For async contexts
 //! wrap calls in `tokio::task::spawn_blocking`.
 
+use std::time::Duration;
+
 use anyhow::{anyhow, Context, Result};
 use serde::Deserialize;
 
 use rupeecoin_crypto::Hash;
 use rupeecoin_privacy::PrivacyTransaction;
 use rupeecoin_types::Transaction;
+
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+const READ_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// A thin HTTP client for the rupeecoin-node JSON-RPC API.
 ///
@@ -20,6 +25,7 @@ use rupeecoin_types::Transaction;
 /// ```
 pub struct RpcClient {
     base_url: String,
+    agent: ureq::Agent,
 }
 
 // ── Response shapes ───────────────────────────────────────────────────────────
@@ -88,8 +94,13 @@ struct SubmitResponse {
 impl RpcClient {
     /// Create a client targeting `base_url` (e.g. `"http://127.0.0.1:9944"`).
     pub fn new(base_url: impl Into<String>) -> Self {
+        let agent = ureq::AgentBuilder::new()
+            .timeout_connect(CONNECT_TIMEOUT)
+            .timeout_read(READ_TIMEOUT)
+            .build();
         RpcClient {
             base_url: base_url.into().trim_end_matches('/').to_string(),
+            agent,
         }
     }
 
@@ -101,7 +112,7 @@ impl RpcClient {
 
     /// Return the current chain height.
     pub fn height(&self) -> Result<u64> {
-        let resp: HeightResponse = ureq::get(&self.url("/rpc/height"))
+        let resp: HeightResponse = self.agent.get(&self.url("/rpc/height"))
             .call()
             .context("GET /rpc/height")?
             .into_json()
@@ -112,7 +123,7 @@ impl RpcClient {
     /// Return the most recent shielded commitment-tree roots and the total
     /// number of commitments.
     pub fn recent_roots(&self) -> Result<RecentRootsResponse> {
-        ureq::get(&self.url("/rpc/recent_roots"))
+        self.agent.get(&self.url("/rpc/recent_roots"))
             .call()
             .context("GET /rpc/recent_roots")?
             .into_json()
@@ -120,10 +131,10 @@ impl RpcClient {
     }
 
     /// Return a page of shielded outputs starting at leaf `start`.
-    /// `count` is capped server-side at 100.
+    /// `count` is capped server-side at 1000.
     pub fn shielded_outputs(&self, start: u64, count: u64) -> Result<Vec<ShieldedOutputEntry>> {
         let url = format!("{}/rpc/shielded_outputs?start={start}&count={count}", self.base_url);
-        ureq::get(&url)
+        self.agent.get(&url)
             .call()
             .context("GET /rpc/shielded_outputs")?
             .into_json()
@@ -133,7 +144,7 @@ impl RpcClient {
     /// Return the Merkle authentication path for commitment-tree leaf `index`.
     pub fn merkle_path(&self, index: u64) -> Result<MerklePathResponse> {
         let url = format!("{}/rpc/merkle_path?index={index}", self.base_url);
-        ureq::get(&url)
+        self.agent.get(&url)
             .call()
             .context("GET /rpc/merkle_path")?
             .into_json()
@@ -144,7 +155,7 @@ impl RpcClient {
     pub fn nullifier_status(&self, nullifier: &Hash) -> Result<bool> {
         let hex = hex::encode(nullifier.as_bytes());
         let url = format!("{}/rpc/nullifier_status?hex={hex}", self.base_url);
-        let resp: NullifierStatusResponse = ureq::get(&url)
+        let resp: NullifierStatusResponse = self.agent.get(&url)
             .call()
             .context("GET /rpc/nullifier_status")?
             .into_json()
@@ -154,7 +165,7 @@ impl RpcClient {
 
     /// Return the comprehensive node status snapshot.
     pub fn status(&self) -> Result<NodeStatus> {
-        ureq::get(&self.url("/rpc/status"))
+        self.agent.get(&self.url("/rpc/status"))
             .call()
             .context("GET /rpc/status")?
             .into_json()
@@ -164,18 +175,31 @@ impl RpcClient {
     /// Return unspent transparent UTXOs for `addr_hex` (40-char lowercase hex).
     pub fn utxos(&self, addr_hex: &str) -> Result<Vec<UtxoEntry>> {
         let url = format!("{}/rpc/utxos?addr={addr_hex}", self.base_url);
-        ureq::get(&url)
+        self.agent.get(&url)
             .call()
             .context("GET /rpc/utxos")?
             .into_json()
             .context("decode utxos response")
     }
 
+    /// Return the next expected nonce for a transparent address.
+    pub fn nonce(&self, addr_hex: &str) -> Result<u64> {
+        #[derive(Deserialize)]
+        struct Resp { nonce: u64 }
+        let url = format!("{}/rpc/nonce?addr={addr_hex}", self.base_url);
+        let resp: Resp = self.agent.get(&url)
+            .call()
+            .context("GET /rpc/nonce")?
+            .into_json()
+            .context("decode nonce response")?;
+        Ok(resp.nonce)
+    }
+
     /// Submit a transparent `Transaction`.  Returns `Ok(())` on acceptance.
     pub fn submit_tx(&self, tx: &Transaction) -> Result<()> {
         let bytes = bincode::serialize(tx).context("serialize transaction")?;
         let hex_body = hex::encode(&bytes);
-        let resp: SubmitResponse = ureq::post(&self.url("/rpc/tx"))
+        let resp: SubmitResponse = self.agent.post(&self.url("/rpc/tx"))
             .set("Content-Type", "text/plain")
             .send_string(&hex_body)
             .context("POST /rpc/tx")?
@@ -192,7 +216,7 @@ impl RpcClient {
     pub fn submit_privacy_tx(&self, tx: &PrivacyTransaction) -> Result<()> {
         let bytes = bincode::serialize(tx).context("serialize privacy tx")?;
         let hex_body = hex::encode(&bytes);
-        let resp: SubmitResponse = ureq::post(&self.url("/rpc/privacy_tx"))
+        let resp: SubmitResponse = self.agent.post(&self.url("/rpc/privacy_tx"))
             .set("Content-Type", "text/plain")
             .send_string(&hex_body)
             .context("POST /rpc/privacy_tx")?

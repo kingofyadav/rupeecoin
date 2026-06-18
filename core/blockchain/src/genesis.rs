@@ -54,13 +54,13 @@ pub fn genesis_block_with_timestamp(timestamp: u64) -> Block {
     utxo_snap
         .apply_block(&genesis_placeholder)
         .expect("genesis coinbase is valid");
-    let genesis_state_root = utxo_snap.state_root();
+    let genesis_state_root = utxo_snap.state_root().expect("UTXO serialization failed");
 
     let header = BlockHeader {
         version: 1,
         prev_hash: Hash::zero(),
         merkle_root: mr,
-        timestamp: 1_700_000_000,
+        timestamp,
         height: 0,
         slot: 0,
         proposer_index: 0,

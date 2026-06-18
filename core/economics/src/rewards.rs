@@ -124,12 +124,15 @@ pub struct FeeRouteSplit {
 }
 
 /// Split `gas_used * base_fee` between burn and PMFP.
+///
+/// PMFP (minority share, 30%) is computed first so rounding dust stays in the
+/// burn amount rather than being silently added to the PMFP pool.
 pub fn route_fees(gas_used: u64, base_fee: u64) -> FeeRouteSplit {
     let total = gas_used.saturating_mul(base_fee);
-    let burned = total * FEE_BURN_PERCENT / 100;
-    let pmfp = total.saturating_sub(burned);
+    let pmfp_contribution = total * FEE_PMFP_PERCENT / 100;
+    let burned = total.saturating_sub(pmfp_contribution);
     FeeRouteSplit {
         burned,
-        pmfp_contribution: pmfp,
+        pmfp_contribution,
     }
 }

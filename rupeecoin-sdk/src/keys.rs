@@ -55,7 +55,9 @@ impl Wallet {
     pub fn address_at(&self, index: u32) -> Address {
         self.hd_root()
             .child(HD_RECEIVE)
+            .expect("depth 1 is within bounds")
             .child(index)
+            .expect("depth 2 is within bounds")
             .to_keypair()
             .public_key
             .to_address()
@@ -68,8 +70,9 @@ impl Wallet {
     }
 
     /// Advance the receive index and return the new address.
+    /// Uses saturating_add to prevent wrapping at u32::MAX.
     pub fn advance_receive_index(&mut self) -> Address {
-        self.receive_index += 1;
+        self.receive_index = self.receive_index.saturating_add(1);
         self.address_at(self.receive_index)
     }
 
@@ -82,7 +85,9 @@ impl Wallet {
     pub fn receive_keypair(&self) -> KeyPair {
         self.hd_root()
             .child(HD_RECEIVE)
+            .expect("depth 1 is within bounds")
             .child(self.receive_index)
+            .expect("depth 2 is within bounds")
             .to_keypair()
     }
 
@@ -90,7 +95,9 @@ impl Wallet {
     pub fn validator_keypair(&self) -> KeyPair {
         self.hd_root()
             .child(HD_VALIDATOR)
+            .expect("depth 1 is within bounds")
             .child(0)
+            .expect("depth 2 is within bounds")
             .to_keypair()
     }
 }

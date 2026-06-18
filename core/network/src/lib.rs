@@ -52,12 +52,15 @@ fn is_rate_limited(
     let now = Instant::now();
     let entry = peer_rate.entry(*peer).or_insert((0, now));
     if now.duration_since(entry.1).as_secs() >= RATE_LIMIT_WINDOW_SECS {
-        *entry = (1, now);
-        return false;
+        *entry = (0, now);
     }
     entry.0 += 1;
     entry.0 > RATE_LIMIT_MAX
 }
+
+/// Maximum byte length for a single sync message (request or response).
+/// Prevents a peer from triggering a 4 GiB allocation via the 4-byte length prefix.
+const MAX_SYNC_MESSAGE_SIZE: usize = 4 * 1024 * 1024; // 4 MiB
 
 // ── Gossipsub topics ─────────────────────────────────────────────────────────
 
@@ -94,7 +97,14 @@ impl request_response::Codec for SyncCodec {
     {
         let mut len = [0u8; 4];
         io.read_exact(&mut len).await?;
-        let mut buf = vec![0u8; u32::from_be_bytes(len) as usize];
+        let length = u32::from_be_bytes(len) as usize;
+        if length > MAX_SYNC_MESSAGE_SIZE {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("sync request too large: {length} bytes (max {MAX_SYNC_MESSAGE_SIZE})"),
+            ));
+        }
+        let mut buf = vec![0u8; length];
         io.read_exact(&mut buf).await?;
         bincode::deserialize(&buf).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
     }
@@ -124,7 +134,14 @@ impl request_response::Codec for SyncCodec {
     {
         let mut len = [0u8; 4];
         io.read_exact(&mut len).await?;
-        let mut buf = vec![0u8; u32::from_be_bytes(len) as usize];
+        let length = u32::from_be_bytes(len) as usize;
+        if length > MAX_SYNC_MESSAGE_SIZE {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("sync response too large: {length} bytes (max {MAX_SYNC_MESSAGE_SIZE})"),
+            ));
+        }
+        let mut buf = vec![0u8; length];
         io.read_exact(&mut buf).await?;
         bincode::deserialize(&buf).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
     }
@@ -400,22 +417,28 @@ async fn on_event(
             message,
             ..
         })) => {
+            // Require a known source PeerId — anonymous messages bypass allowlist/rate-limit.
+            let src = match message.source {
+                Some(s) => s,
+                None => {
+                    warn!("gossipsub: dropping anonymous message (no source PeerId)");
+                    return;
+                }
+            };
             // N-04: allowlist filter, then rate-limit per message source.
-            if let Some(src) = message.source {
-                if !is_allowlisted(allowlist, &src) {
-                    trace!("gossipsub: dropping message from non-allowlisted peer {src}");
-                    return;
-                }
-                if is_rate_limited(peer_rate, &src) {
-                    warn!("gossipsub: rate limit exceeded for {src} — dropping message");
-                    return;
-                }
+            if !is_allowlisted(allowlist, &src) {
+                trace!("gossipsub: dropping message from non-allowlisted peer {src}");
+                return;
+            }
+            if is_rate_limited(peer_rate, &src) {
+                warn!("gossipsub: rate limit exceeded for {src} — dropping message");
+                return;
             }
 
             if message.topic == block_topic.hash() {
                 match bincode::deserialize::<Block>(&message.data) {
                     Ok(block) => {
-                        let from = message.source.unwrap_or_else(PeerId::random);
+                        let from = src;
                         debug!(
                             "gossipsub: block height {} from {from}",
                             block.header.height
@@ -493,10 +516,9 @@ async fn on_event(
                         .send(NetworkEvent::TransactionReceived { tx: Box::new(tx) })
                         .await;
 
-                    // Track for timeout fallback at this node.
-                    dandelion.enter_stem(txid, tx_bytes.clone());
-
                     if remaining_hops > 0 {
+                        // Still in stem phase — track for timeout fallback.
+                        dandelion.enter_stem(txid, tx_bytes.clone());
                         // Continue the stem: forward to one random non-sender peer.
                         if let Some(next_peer) =
                             pick_stem_peer(rng, connected_peers, Some(&sender))
@@ -524,8 +546,7 @@ async fn on_event(
                             }
                         }
                     } else {
-                        // Hops exhausted — transition to fluff phase.
-                        dandelion.remove(&txid);
+                        // Hops exhausted — fluff directly without entering stem phase.
                         if let Err(e) = swarm
                             .behaviour_mut()
                             .gossipsub
@@ -552,6 +573,12 @@ async fn on_event(
             },
         )) => {
             debug!("sync request from {peer}: from={}", request.from_height);
+            if pending_sync.len() >= 64 {
+                // Drop oldest to prevent unbounded growth under sustained sync load.
+                if let Some(oldest) = pending_sync.keys().next().copied() {
+                    pending_sync.remove(&oldest);
+                }
+            }
             pending_sync.insert(request_id, channel);
             let _ = event_tx
                 .send(NetworkEvent::SyncRequested {
@@ -581,8 +608,12 @@ async fn on_event(
         // ── mDNS ──────────────────────────────────────────────────────────────
         SwarmEvent::Behaviour(RupeeCoinBehaviourEvent::Mdns(mdns::Event::Discovered(peers))) => {
             for (peer_id, addr) in &peers {
-                info!("mDNS: discovered {peer_id} at {addr}");
-                swarm.behaviour_mut().gossipsub.add_explicit_peer(peer_id);
+                if is_allowlisted(allowlist, peer_id) {
+                    info!("mDNS: adding allowlisted peer {peer_id} at {addr}");
+                    swarm.behaviour_mut().gossipsub.add_explicit_peer(peer_id);
+                } else {
+                    trace!("mDNS: ignoring non-allowlisted peer {peer_id}");
+                }
             }
         }
         SwarmEvent::Behaviour(RupeeCoinBehaviourEvent::Mdns(mdns::Event::Expired(peers))) => {

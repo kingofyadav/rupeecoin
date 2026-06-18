@@ -5,9 +5,10 @@ use crate::attestation::SlashingEvidence;
 use crate::MAINNET_CHAIN_ID;
 
 // ── Marker prefixes for special coinbase-like transactions ────────────────────
-// Must not collide with the 8-byte height stored in regular coinbase_data.
-const REWARD_CLAIM_PREFIX: &[u8] = b"RC\x01";
-const SLASH_REPORT_PREFIX: &[u8] = b"SR\x01";
+// 9 bytes each so they can never be confused with the 8-byte LE u64 height
+// stored in a regular block-reward coinbase_data.
+const REWARD_CLAIM_PREFIX: &[u8] = b"RC\x01\x00\x00\x00\x00\x00\x00";
+const SLASH_REPORT_PREFIX: &[u8] = b"SR\x01\x00\x00\x00\x00\x00\x00";
 
 /// Reference to a previous unspent output.
 #[derive(Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Debug)]

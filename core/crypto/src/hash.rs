@@ -40,7 +40,8 @@ pub fn hash_data(data: &[u8]) -> Hash {
 }
 
 pub fn hash_concat(a: &Hash, b: &Hash) -> Hash {
-    let mut h = blake3::Hasher::new();
+    // Domain-keyed to prevent collisions with hash_data / leaf_hash / node_hash outputs.
+    let mut h = blake3::Hasher::new_derive_key("rupeecoin-hash-concat-v1");
     h.update(a.as_bytes());
     h.update(b.as_bytes());
     Hash(*h.finalize().as_bytes())

@@ -10,6 +10,8 @@ pub const COINBASE_MATURITY: u64 = 100;
 
 #[derive(Error, Debug)]
 pub enum UtxoError {
+    #[error("non-coinbase transaction must have at least one input")]
+    NoInputs,
     #[error("input not found in UTXO set: {0:?}")]
     InputNotFound(OutPoint),
     #[error("public key does not own the referenced output")]
@@ -77,6 +79,8 @@ impl UtxoSet {
         if let Some(n) = self.nonces.get_mut(addr) {
             if *n > 0 {
                 *n -= 1;
+            } else {
+                tracing::warn!("attempt to decrement nonce already at zero for {:?}", addr);
             }
         }
     }
@@ -94,6 +98,10 @@ impl UtxoSet {
     /// `current_height` is the height of the block the tx would be included in,
     /// used for expiry checking.
     pub fn validate_transfer(&self, tx: &Transaction, current_height: u64) -> Result<(), UtxoError> {
+        if tx.inputs.is_empty() {
+            return Err(UtxoError::NoInputs);
+        }
+
         // Expiry check (0 means no expiry).
         if tx.expiry != 0 && current_height > tx.expiry {
             return Err(UtxoError::Expired {
@@ -221,19 +229,24 @@ impl UtxoSet {
     ///
     /// Entries are sorted deterministically (by bincode-serialized OutPoint) so
     /// all nodes with identical UTXO sets produce the same root.
-    pub fn state_root(&self) -> Hash {
+    pub fn state_root(&self) -> Result<Hash, bincode::Error> {
         if self.utxos.is_empty() {
-            return Hash::zero();
+            return Ok(Hash::zero());
         }
 
-        let mut entries: Vec<(&OutPoint, &TxOutput)> = self.utxos.iter().collect();
-        entries.sort_by_key(|(op, _)| bincode::serialize(op).expect("outpoint serialize"));
+        // Serialize each entry once; sort by serialized key for determinism.
+        let mut entries: Vec<(Vec<u8>, Vec<u8>)> = self
+            .utxos
+            .iter()
+            .map(|(op, out)| Ok((bincode::serialize(op)?, bincode::serialize(out)?)))
+            .collect::<Result<_, bincode::Error>>()?;
+        entries.sort_by(|(a, _), (b, _)| a.cmp(b));
 
         let mut layer: Vec<Hash> = entries
             .iter()
-            .map(|(op, out)| {
-                let mut data = bincode::serialize(op).expect("outpoint serialize");
-                data.extend(bincode::serialize(out).expect("txoutput serialize"));
+            .map(|(op_bytes, out_bytes)| {
+                let mut data = op_bytes.clone();
+                data.extend_from_slice(out_bytes);
                 leaf_hash(&data)
             })
             .collect();
@@ -246,7 +259,7 @@ impl UtxoSet {
             }
             layer = next;
         }
-        layer[0]
+        Ok(layer[0])
     }
 }
 

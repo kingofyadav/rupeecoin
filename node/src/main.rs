@@ -276,7 +276,7 @@ fn load_or_create_chain(
                     // manipulated UTXO set cannot pass checkpoint validation.
                     if h == checkpoint_height {
                         if let Some(expected_sr) = checkpoint_state_root {
-                            let actual_sr = chain.utxo_set.state_root();
+                            let actual_sr = chain.utxo_set.state_root().expect("UTXO serialization failed");
                             anyhow::ensure!(
                                 actual_sr == expected_sr,
                                 "checkpoint state_root mismatch at height {h}: \
@@ -401,7 +401,7 @@ fn persist_contract_storage(store: &ChainStore, block: &rupeecoin_types::Block, 
             let contract_addr = ctx.self_addr;
             match store.load_contract_storage(contract_addr) {
                 Ok(storage) => {
-                    if let Ok((ExecResult::Return { .. }, new_storage)) = run(&deploy.bytecode, storage, ctx) {
+                    if let Ok((ExecResult::Return { .. }, Some(new_storage))) = run(&deploy.bytecode, storage, ctx) {
                         if let Err(e) = store.save_contract_storage(contract_addr, &new_storage) {
                             error!("persist contract storage (deploy) addr={contract_addr}: {e}");
                         }
@@ -427,7 +427,7 @@ fn persist_contract_storage(store: &ChainStore, block: &rupeecoin_types::Block, 
                                 gas_limit: call.gas_limit,
                                 calldata: call.calldata,
                             };
-                            if let Ok((ExecResult::Return { .. }, new_storage)) = run(&bytecode, storage, ctx) {
+                            if let Ok((ExecResult::Return { .. }, Some(new_storage))) = run(&bytecode, storage, ctx) {
                                 if let Err(e) = store.save_contract_storage(call.contract_addr, &new_storage) {
                                     error!("persist contract storage (call) addr={}: {e}", call.contract_addr);
                                 }
@@ -512,13 +512,13 @@ fn try_reorg(
 
     // Determine how many canonical blocks to roll back so the common ancestor
     // becomes the new tip.  The common ancestor is the parent of fork_path[0].
-    let common_ancestor = *consensus.known_block_parents.get(&fork_path[0])?;
     let canon_tip_height = chain.height();
-    let ancestor_height = fork_blocks.get(&fork_path[0])
+    // Derive ancestor height from the oldest fork block (first in ordered list).
+    let ancestor_height = fork_blocks_ordered
+        .first()
         .map(|b| b.header.height.saturating_sub(1))
         .unwrap_or(0);
     let rollback_count = (canon_tip_height.saturating_sub(ancestor_height)) as usize;
-    let _ = common_ancestor; // used for clarity only; heights derive the count
 
     let removed = chain.rollback(rollback_count);
     let rolled_back = removed.len();
@@ -584,11 +584,20 @@ async fn main() -> Result<()> {
     let mut mempool = Mempool::new(4096);
 
     // 8.2: restore persisted validator registry so claimable_rewards survive restart.
-    let mut registry: ValidatorRegistry = store
-        .load_raw_meta(b"validator_registry")
-        .unwrap_or(None)
-        .and_then(|b| bincode::deserialize(&b).ok())
-        .unwrap_or_else(ValidatorRegistry::new);
+    let mut registry: ValidatorRegistry = match store.load_raw_meta(b"validator_registry") {
+        Ok(Some(b)) => match bincode::deserialize(&b) {
+            Ok(reg) => reg,
+            Err(e) => {
+                warn!("validator_registry deserialization failed ({e}); starting fresh");
+                ValidatorRegistry::new()
+            }
+        },
+        Ok(None) => ValidatorRegistry::new(),
+        Err(e) => {
+            warn!("validator_registry load failed ({e}); starting fresh");
+            ValidatorRegistry::new()
+        }
+    };
 
     let mut consensus = ConsensusState::new();
     let mut pending_attestations: Vec<Attestation> = Vec::new();
@@ -621,15 +630,25 @@ async fn main() -> Result<()> {
 
     let is_validator = cfg.stake_micro_rpc >= MIN_STAKE_MICRO_RPC;
 
+    let node_chain_id = cfg
+        .genesis_config
+        .as_ref()
+        .map_or_else(|| GenesisConfig::mainnet().chain_id, |g| g.chain_id);
+
     if cfg.rpc_port > 0 {
         let rpc_state = Arc::new(rpc::RpcState {
             chain_snapshot: Arc::clone(&rpc_chain_snapshot),
             store: Arc::clone(&store),
+            chain_id: node_chain_id,
             pending_privacy_txs: Arc::clone(&pending_privacy_txs),
             pending_txs: Arc::clone(&pending_txs),
         });
         let port = cfg.rpc_port;
-        tokio::spawn(async move { rpc::serve(rpc_state, port).await });
+        tokio::spawn(async move {
+            if let Err(e) = rpc::serve(rpc_state, port).await {
+                tracing::error!("RPC server error: {e:#}");
+            }
+        });
     }
 
     // ── Phase 13.3: Tor / SOCKS5 ─────────────────────────────────────────────
@@ -810,7 +829,9 @@ async fn main() -> Result<()> {
                             let block_hash = block.hash();
                             let parent_hash = block.header.prev_hash;
                             consensus.register_fork_block(block_hash, parent_hash);
-                            // Cache for potential reorg (limit 128 blocks to bound memory).
+                            // Evict stale fork blocks beyond reorg depth, then cache.
+                            let min_height = chain.height().saturating_sub(REORG_DEPTH as u64);
+                            fork_blocks.retain(|_, b| b.header.height >= min_height);
                             if fork_blocks.len() < 128 {
                                 fork_blocks.insert(block_hash, *block);
                             }

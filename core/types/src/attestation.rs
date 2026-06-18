@@ -11,9 +11,11 @@ pub struct Attestation {
 }
 
 impl Attestation {
-    /// The data every validator signs: BLAKE3(slot_le ++ block_hash).
+    /// The data every validator signs: BLAKE3("ATTEST" ++ slot_le ++ block_hash).
+    /// The "ATTEST" prefix distinguishes attestation signatures from announcement signatures.
     pub fn sig_data(slot: u64, block_hash: &Hash) -> Hash {
-        let mut buf = Vec::with_capacity(8 + 32);
+        let mut buf = Vec::with_capacity(6 + 8 + 32);
+        buf.extend_from_slice(b"ATTEST");
         buf.extend_from_slice(&slot.to_le_bytes());
         buf.extend_from_slice(block_hash.as_bytes());
         hash_data(&buf)
@@ -32,8 +34,11 @@ pub struct ValidatorAnnouncement {
 }
 
 impl ValidatorAnnouncement {
+    /// The data a validator signs when announcing: BLAKE3("VANN" ++ pubkey_bytes ++ stake_le).
+    /// The "VANN" prefix distinguishes announcement signatures from attestation signatures.
     pub fn sig_data(pubkey: &PublicKey, stake: u64) -> Hash {
-        let mut buf = Vec::with_capacity(pubkey.as_bytes().len() + 8);
+        let mut buf = Vec::with_capacity(4 + pubkey.as_bytes().len() + 8);
+        buf.extend_from_slice(b"VANN");
         buf.extend_from_slice(pubkey.as_bytes());
         buf.extend_from_slice(&stake.to_le_bytes());
         hash_data(&buf)
