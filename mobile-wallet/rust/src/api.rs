@@ -242,14 +242,15 @@ pub async fn prove_spend_batch_mobile(
 mod tests {
     use super::*;
 
-    fn tmp_path() -> String {
+    fn tmp_path() -> (tempfile::TempDir, String) {
         let dir = tempfile::tempdir().unwrap();
-        dir.into_path().join("wallet.json").to_str().unwrap().to_string()
+        let path = dir.path().join("wallet.json").to_str().unwrap().to_string();
+        (dir, path)
     }
 
     #[test]
     fn generate_and_unlock() {
-        let path = tmp_path();
+        let (_dir, path) = tmp_path();
         let info = generate_wallet("pass123".into(), path.clone()).unwrap();
         assert_eq!(info.receive_index, 0);
         assert!(!info.address.is_empty());
@@ -260,7 +261,7 @@ mod tests {
 
     #[test]
     fn advance_address_increments() {
-        let path = tmp_path();
+        let (_dir, path) = tmp_path();
         let first = generate_wallet("pass".into(), path.clone()).unwrap();
         let second = advance_address("pass".into(), path.clone()).unwrap();
         assert_eq!(second.receive_index, 1);
@@ -269,7 +270,7 @@ mod tests {
 
     #[test]
     fn change_passphrase_works() {
-        let path = tmp_path();
+        let (_dir, path) = tmp_path();
         generate_wallet("old".into(), path.clone()).unwrap();
         change_passphrase("old".into(), "new".into(), path.clone()).unwrap();
         assert!(unlock_wallet("new".into(), path.clone()).is_ok());

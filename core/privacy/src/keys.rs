@@ -12,6 +12,11 @@ const KYBER768_PK_BYTES: usize = 1184;
 const KYBER768_SK_BYTES: usize = 2400;
 const KYBER768_COINS_BYTES: usize = 64;
 
+// Link-time assertions to catch upstream size changes before they silently corrupt keys.
+const _: () = assert!(KYBER768_PK_BYTES == 1184, "Kyber768 public key size changed");
+const _: () = assert!(KYBER768_SK_BYTES == 2400, "Kyber768 secret key size changed");
+const _: () = assert!(KYBER768_COINS_BYTES == 64, "Kyber768 coins size changed");
+
 extern "C" {
     /// Deterministic Kyber768 key generation.  `coins` must be exactly 64 bytes.
     fn PQCLEAN_KYBER768_CLEAN_crypto_kem_keypair_derand(
@@ -137,7 +142,7 @@ impl ViewKey {
     }
 
     /// Derive a Kyber768 keypair deterministically from a 32-byte seed.
-    pub fn from_seed(seed: &[u8; 32]) -> Self {
+    pub fn from_seed(seed: &[u8; 32]) -> Result<Self, String> {
         let mut coins = [0u8; KYBER768_COINS_BYTES];
         blake3::Hasher::new_derive_key("rupeecoin-view-key-coins-v1")
             .update(seed)
@@ -146,20 +151,22 @@ impl ViewKey {
 
         let mut pk_bytes = [0u8; KYBER768_PK_BYTES];
         let mut sk_bytes = [0u8; KYBER768_SK_BYTES];
-        unsafe {
-            let ret = PQCLEAN_KYBER768_CLEAN_crypto_kem_keypair_derand(
+        let ret = unsafe {
+            PQCLEAN_KYBER768_CLEAN_crypto_kem_keypair_derand(
                 pk_bytes.as_mut_ptr(),
                 sk_bytes.as_mut_ptr(),
                 coins.as_ptr(),
-            );
-            assert_eq!(ret, 0, "Kyber768 keypair_derand failed");
+            )
+        };
+        if ret != 0 {
+            return Err(format!("Kyber768 keypair_derand returned {ret}"));
         }
 
-        ViewKey {
+        Ok(ViewKey {
             public: ViewPublicKey::from_bytes(pk_bytes.to_vec()),
             secret: ViewSecretKey::from_bytes(&sk_bytes)
-                .expect("keypair_derand produced valid key"),
-        }
+                .ok_or_else(|| "keypair_derand produced invalid secret key".to_string())?,
+        })
     }
 }
 
@@ -192,27 +199,33 @@ pub struct PrivacyKeyBundle {
 }
 
 impl PrivacyKeyBundle {
+    /// Generate a fresh bundle from a cryptographically-random seed.
+    /// All keys are co-derived so restoring the seed restores everything.
     pub fn generate() -> Self {
-        let spend_key = SpendKey::generate();
-        let nullifier_key = spend_key.nullifier_key();
-        let view_key = ViewKey::generate();
-        let payment_address = PaymentAddress::from_keys(&nullifier_key, &view_key.public);
-        PrivacyKeyBundle {
-            spend_key,
-            nullifier_key,
-            view_key,
-            payment_address,
-        }
+        let mut seed = [0u8; 32];
+        rand::thread_rng().fill_bytes(&mut seed);
+        Self::from_seed(&seed)
     }
 
     /// Derive all privacy keys deterministically from a 32-byte master seed.
-    /// Restoring the same seed will always reproduce the same payment address
-    /// and view/nullifier keys, allowing full wallet recovery.
+    ///
+    /// Expands `seed` to 64 bytes via BLAKE3 XOF first, then splits into
+    /// separate inputs for the spend key and the view key, preventing any
+    /// relationship between the two derived secrets.
     pub fn from_seed(seed: &[u8; 32]) -> Self {
-        let spend_key_bytes = blake3::derive_key("rupeecoin-spend-key-v1", seed);
+        let mut expanded = [0u8; 64];
+        blake3::Hasher::new_derive_key("rupeecoin-from-seed-expand-v1")
+            .update(seed)
+            .finalize_xof()
+            .fill(&mut expanded);
+        let spend_seed: [u8; 32] = expanded[..32].try_into().unwrap();
+        let view_seed: [u8; 32] = expanded[32..].try_into().unwrap();
+
+        let spend_key_bytes = blake3::derive_key("rupeecoin-spend-key-v1", &spend_seed);
         let spend_key = SpendKey::from_bytes(spend_key_bytes);
         let nullifier_key = spend_key.nullifier_key();
-        let view_key = ViewKey::from_seed(seed);
+        let view_key = ViewKey::from_seed(&view_seed)
+            .expect("Kyber768 keygen from expanded seed must succeed");
         let payment_address = PaymentAddress::from_keys(&nullifier_key, &view_key.public);
         PrivacyKeyBundle {
             spend_key,
