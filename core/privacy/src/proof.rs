@@ -173,6 +173,10 @@ pub use rupeecoin_zkproof::BatchedStarkSpendProof;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SpendEvidence {
     /// Phase 4 linkable spend proof — reveals note commitment.
+    ///
+    /// Deprecated: new transactions must use `Stark` or `BatchedStark`.
+    /// Retained for deserialization of historical data only.
+    #[deprecated(since = "0.5.0", note = "use Stark or BatchedStark; Blake3Path reveals note commitment")]
     Blake3Path(SpendProof),
     /// Phase 5B zk-STARK spend proof — hides note commitment entirely.
     Stark(StarkSpendProof),
@@ -180,6 +184,7 @@ pub enum SpendEvidence {
     BatchedStark,
 }
 
+#[allow(deprecated)]
 impl SpendEvidence {
     /// Stateless per-input verification.
     ///
@@ -227,6 +232,7 @@ pub struct StarkProofPlaceholder {
     pub proof_bytes: Vec<u8>,
 }
 
+#[cfg(test)]
 #[allow(deprecated)]
 impl StarkProofPlaceholder {
     pub fn unimplemented(statement: &[u8]) -> Self {

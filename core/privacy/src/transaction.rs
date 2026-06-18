@@ -4,7 +4,9 @@ use thiserror::Error;
 
 use crate::commitment_tree::CommitmentTree;
 use crate::note::{EncryptedNote, NoteCommitment, Nullifier};
-use crate::proof::{BalanceProof, BatchedStarkSpendProof, SpendEvidence, SpendProof};
+use crate::proof::{BalanceProof, BatchedStarkSpendProof, SpendEvidence};
+#[cfg(test)]
+use crate::proof::SpendProof;
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -61,6 +63,11 @@ pub struct ShieldedInput {
 
 impl ShieldedInput {
     /// Construct a Phase 4 input from a legacy SpendProof.
+    ///
+    /// Only available in tests; new production code must use `new_stark` or
+    /// `new_batched_stark` to avoid revealing the note commitment.
+    #[cfg(test)]
+    #[allow(deprecated)]
     pub fn new(nullifier: Nullifier, spend_proof: SpendProof, value: u64) -> Self {
         ShieldedInput {
             nullifier,
@@ -240,6 +247,14 @@ impl PrivacyTransaction {
             fee: self.fee,
         };
         if !bp.verify() {
+            return Err(PrivacyTxError::InvalidBalance);
+        }
+
+        // Cross-validate stored balance_proof against re-derived values.
+        if self.balance_proof.total_input != total_in
+            || self.balance_proof.total_output != total_out
+            || self.balance_proof.fee != self.fee
+        {
             return Err(PrivacyTxError::InvalidBalance);
         }
 

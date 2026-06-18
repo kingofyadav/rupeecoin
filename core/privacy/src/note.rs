@@ -126,12 +126,12 @@ impl EncryptedNote {
 // ── Key and nonce derivation ──────────────────────────────────────────────────
 
 fn note_enc_key(shared_secret: &[u8; 32]) -> chacha20poly1305::Key {
-    // BLAKE3(shared_secret || "_enc") → 32-byte key
-    let mut buf = [0u8; 36];
-    buf[..32].copy_from_slice(shared_secret);
-    buf[32..].copy_from_slice(b"_enc");
-    let key_bytes = hash_data(&buf);
-    chacha20poly1305::Key::from(*key_bytes.as_bytes())
+    let mut key = [0u8; 32];
+    blake3::Hasher::new_derive_key("rupeecoin-note-enc-key-v1")
+        .update(shared_secret)
+        .finalize_xof()
+        .fill(&mut key);
+    chacha20poly1305::Key::from(key)
 }
 
 fn note_nonce(shared_secret: &[u8; 32]) -> chacha20poly1305::XNonce {

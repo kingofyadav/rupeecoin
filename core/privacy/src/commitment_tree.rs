@@ -192,6 +192,12 @@ pub struct MerklePath {
 impl MerklePath {
     /// Recompute the root using positional Poseidon: `compress(left, right)`.
     pub fn compute_root(&self, leaf: Hash) -> Hash {
+        assert_eq!(
+            self.path.len(),
+            TREE_DEPTH,
+            "MerklePath must have exactly TREE_DEPTH ({TREE_DEPTH}) entries, got {}",
+            self.path.len()
+        );
         let mut cur = leaf;
         for &(sib, is_right) in &self.path {
             cur = if is_right {
