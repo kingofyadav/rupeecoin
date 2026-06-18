@@ -4,8 +4,10 @@
 ///
 /// Serves a REST API and a minimal SPA over the local RocksDB chain store.
 use std::collections::HashMap;
+use std::net::IpAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use axum::{
     extract::{Path, Query, State},
@@ -36,6 +38,10 @@ struct Args {
     #[arg(long, default_value_t = 8080)]
     port: u16,
 
+    /// IP address to bind. Defaults to 127.0.0.1 (loopback only).
+    #[arg(long, default_value = "127.0.0.1")]
+    bind: IpAddr,
+
     /// Secondary RocksDB path (scratch dir for WAL replay).
     /// When set, the explorer opens as a RocksDB secondary instance and
     /// automatically picks up new blocks from a running node on each request.
@@ -49,6 +55,8 @@ struct ExplorerState {
     store: ChainStore,
     /// txid (hex) → block height — built at startup, refreshed on demand.
     tx_index: RwLock<HashMap<String, u64>>,
+    /// Highest block height already indexed into `tx_index`.
+    last_indexed_height: AtomicU64,
 }
 
 // ── JSON helpers ──────────────────────────────────────────────────────────────
@@ -161,6 +169,28 @@ fn internal(msg: String) -> Response {
         .into_response()
 }
 
+// ── Tx-index refresh ─────────────────────────────────────────────────────────
+
+async fn refresh_if_needed(state: &Arc<ExplorerState>) {
+    let old_tip = state.last_indexed_height.load(Ordering::Relaxed);
+    state.store.try_catch_up_with_primary();
+    let new_tip = match state.store.get_tip() {
+        Ok(Some((_, tip))) => tip,
+        _ => return,
+    };
+    if new_tip > old_tip {
+        let mut index = state.tx_index.write().await;
+        for height in (old_tip + 1)..=new_tip {
+            if let Ok(Some(block)) = state.store.get_block_by_height(height) {
+                for tx in &block.transactions {
+                    index.insert(h(&tx.txid()), height);
+                }
+            }
+        }
+        state.last_indexed_height.store(new_tip, Ordering::Relaxed);
+    }
+}
+
 // ── Handlers ─────────────────────────────────────────────────────────────────
 
 async fn serve_spa() -> Response {
@@ -172,7 +202,7 @@ async fn serve_spa() -> Response {
 }
 
 async fn api_height(State(s): State<Arc<ExplorerState>>) -> Response {
-    s.store.try_catch_up_with_primary();
+    refresh_if_needed(&s).await;
     match s.store.get_tip() {
         Ok(Some((hash, height))) => Json(json!({ "height": height, "hash": h(&hash) })).into_response(),
         Ok(None) => Json(json!({ "height": 0, "hash": null })).into_response(),
@@ -181,7 +211,7 @@ async fn api_height(State(s): State<Arc<ExplorerState>>) -> Response {
 }
 
 async fn api_recent(State(s): State<Arc<ExplorerState>>) -> Response {
-    s.store.try_catch_up_with_primary();
+    refresh_if_needed(&s).await;
     match s.store.get_recent_blocks(20) {
         Ok(blocks) => Json(blocks.iter().map(block_summary).collect::<Vec<_>>()).into_response(),
         Err(e) => internal(e.to_string()),
@@ -192,7 +222,7 @@ async fn api_block_by_height(
     State(s): State<Arc<ExplorerState>>,
     Path(height): Path<u64>,
 ) -> Response {
-    s.store.try_catch_up_with_primary();
+    refresh_if_needed(&s).await;
     match s.store.get_block_by_height(height) {
         Ok(Some(block)) => Json(full_block_json(&block)).into_response(),
         Ok(None) => not_found(&format!("no block at height {height}")),
@@ -204,7 +234,7 @@ async fn api_block_by_hash(
     State(s): State<Arc<ExplorerState>>,
     Path(hash_hex): Path<String>,
 ) -> Response {
-    s.store.try_catch_up_with_primary();
+    refresh_if_needed(&s).await;
     let bytes = match hex::decode(&hash_hex) {
         Ok(b) if b.len() == 32 => b,
         _ => return bad_req("hash must be 64 hex chars"),
@@ -219,6 +249,8 @@ async fn api_block_by_hash(
 }
 
 async fn api_tx(State(s): State<Arc<ExplorerState>>, Path(txid_hex): Path<String>) -> Response {
+    refresh_if_needed(&s).await;
+    let txid_hex = txid_hex.to_lowercase();
     let index = s.tx_index.read().await;
     let height = match index.get(&txid_hex) {
         Some(&h) => h,
@@ -249,7 +281,7 @@ async fn api_address(
     State(s): State<Arc<ExplorerState>>,
     Path(addr_str): Path<String>,
 ) -> Response {
-    s.store.try_catch_up_with_primary();
+    refresh_if_needed(&s).await;
     // Accept both Base58Check and raw hex.
     let addr = if let Ok(a) = decode_address(&addr_str) {
         a
@@ -317,7 +349,7 @@ async fn api_search(
     State(s): State<Arc<ExplorerState>>,
     Query(params): Query<SearchQuery>,
 ) -> Response {
-    s.store.try_catch_up_with_primary();
+    refresh_if_needed(&s).await;
     let q = params.q.trim().to_string();
 
     // 1. Pure numeric → block by height
@@ -335,7 +367,8 @@ async fn api_search(
 
     // 2. 64-char hex → try block hash, then txid
     if q.len() == 64 && q.chars().all(|c| c.is_ascii_hexdigit()) {
-        let bytes: [u8; 32] = hex::decode(&q).unwrap().try_into().unwrap();
+        let q_lower = q.to_lowercase();
+        let bytes: [u8; 32] = hex::decode(&q_lower).unwrap().try_into().unwrap();
         let hash = Hash::from_bytes(bytes);
 
         if let Ok(Some(block)) = s.store.get_block_by_hash(&hash) {
@@ -344,11 +377,11 @@ async fn api_search(
         }
 
         let index = s.tx_index.read().await;
-        if let Some(&height) = index.get(&q) {
+        if let Some(&height) = index.get(&q_lower) {
             drop(index);
             if let Ok(Some(block)) = s.store.get_block_by_height(height) {
                 for tx in &block.transactions {
-                    if h(&tx.txid()) == q {
+                    if h(&tx.txid()) == q_lower {
                         return Json(json!({
                             "type": "transaction",
                             "data": tx_json(tx),
@@ -445,14 +478,19 @@ async fn main() {
     tracing::info!("building tx index…");
     let tx_index = build_tx_index(&store);
     tracing::info!("indexed {} transactions", tx_index.len());
+    let indexed_tip = match store.get_tip() {
+        Ok(Some((_, tip))) => tip,
+        _ => 0,
+    };
 
     let state = Arc::new(ExplorerState {
         store,
         tx_index: RwLock::new(tx_index),
+        last_indexed_height: AtomicU64::new(indexed_tip),
     });
 
     let app = router(state);
-    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], args.port));
+    let addr = std::net::SocketAddr::new(args.bind, args.port);
     tracing::info!("explorer listening on http://{addr}");
     println!("RupeeCoin Explorer → http://{addr}");
 

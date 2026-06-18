@@ -25,7 +25,7 @@ pub fn apply_inactivity_leak(registry: &mut ValidatorRegistry, current_epoch: u6
         if missed <= INACTIVITY_THRESHOLD_EPOCHS {
             continue;
         }
-        let excess_epochs = missed - INACTIVITY_THRESHOLD_EPOCHS;
+        let _excess_epochs = missed - INACTIVITY_THRESHOLD_EPOCHS;
         let stake = registry
             .get(&addr)
             .map(|v| v.stake)
@@ -34,8 +34,8 @@ pub fn apply_inactivity_leak(registry: &mut ValidatorRegistry, current_epoch: u6
             continue;
         }
 
-        let penalty = (stake as u128 * excess_epochs as u128
-            / INACTIVITY_PENALTY_DIVISOR as u128) as u64;
+        // One epoch's worth of penalty; cap at full stake to prevent overdraft.
+        let penalty = (stake / INACTIVITY_PENALTY_DIVISOR).min(stake);
         if penalty == 0 {
             continue;
         }
@@ -44,7 +44,8 @@ pub fn apply_inactivity_leak(registry: &mut ValidatorRegistry, current_epoch: u6
 
         // If stake fell below the minimum, force-exit the validator.
         if new_stake < MIN_STAKE_MICRO_RPC {
-            let _ = registry.request_exit(&addr, current_epoch * 32);
+            let exit_block = current_epoch.saturating_mul(32);
+            let _ = registry.request_exit(&addr, exit_block);
         }
     }
 }

@@ -301,18 +301,20 @@ impl ValidatorRegistry {
 
     pub fn record_proposal(&mut self, address: &Hash, timely: bool) {
         if let Some(v) = self.validators.get_mut(address) {
-            v.contribution.slots_assigned += 1;
+            v.contribution.slots_assigned = v.contribution.slots_assigned.saturating_add(1);
             if timely {
-                v.contribution.slots_timely += 1;
+                v.contribution.slots_timely = v.contribution.slots_timely.saturating_add(1);
             }
         }
     }
 
     pub fn record_attestation_duty(&mut self, address: &Hash, fulfilled: bool) {
         if let Some(v) = self.validators.get_mut(address) {
-            v.contribution.attestations_assigned += 1;
+            v.contribution.attestations_assigned =
+                v.contribution.attestations_assigned.saturating_add(1);
             if fulfilled {
-                v.contribution.attestations_timely += 1;
+                v.contribution.attestations_timely =
+                    v.contribution.attestations_timely.saturating_add(1);
             }
         }
     }
@@ -332,11 +334,12 @@ impl ValidatorRegistry {
     }
 
     pub fn total_active_stake(&self) -> u64 {
-        self.active_set
+        let total: u128 = self.active_set
             .iter()
             .filter_map(|a| self.validators.get(a))
-            .map(|v| v.stake)
-            .sum()
+            .map(|v| v.stake as u128)
+            .sum();
+        total.min(u64::MAX as u128) as u64
     }
 
     pub fn effective_weight(&self, address: &Hash) -> u64 {
@@ -359,11 +362,12 @@ impl ValidatorRegistry {
     /// Sum of effective weights (stake × contribution_multiplier) across the entire
     /// active set.  Used for proportional reward distribution.
     pub fn total_effective_weight(&self) -> u64 {
-        self.active_set
+        let total: u128 = self.active_set
             .iter()
             .filter_map(|a| self.validators.get(a))
-            .map(|v| v.effective_weight())
-            .sum()
+            .map(|v| v.effective_weight() as u128)
+            .sum();
+        total.min(u64::MAX as u128) as u64
     }
 
     // ── Phase 6: economics ────────────────────────────────────────────────────

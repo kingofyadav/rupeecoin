@@ -5,8 +5,9 @@
 /// The `coinbase_data` prefix distinguishes them from regular txs.
 use serde::{Deserialize, Serialize};
 
-pub const CONTRACT_DEPLOY_PREFIX: &[u8] = b"CD\x01";
-pub const CONTRACT_CALL_PREFIX:   &[u8] = b"CC\x01";
+// 9-byte prefixes ensure no collision with the 8-byte LE u64 block height in regular coinbase_data.
+pub const CONTRACT_DEPLOY_PREFIX: &[u8] = b"CD\x01\x00\x00\x00\x00\x00\x00";
+pub const CONTRACT_CALL_PREFIX:   &[u8] = b"CC\x01\x00\x00\x00\x00\x00\x00";
 
 /// A contract deployment payload embedded in `Transaction::coinbase_data`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -37,10 +38,10 @@ pub struct ContractCall {
 
 impl ContractDeploy {
     /// Serialise to the wire format used in `Transaction::coinbase_data`.
-    pub fn encode(&self) -> Vec<u8> {
+    pub fn encode(&self) -> Result<Vec<u8>, bincode::Error> {
         let mut out = CONTRACT_DEPLOY_PREFIX.to_vec();
-        out.extend_from_slice(&bincode::serialize(self).expect("ContractDeploy encode"));
-        out
+        out.extend_from_slice(&bincode::serialize(self)?);
+        Ok(out)
     }
 
     /// Deserialise from `Transaction::coinbase_data`.
@@ -53,10 +54,11 @@ impl ContractDeploy {
 }
 
 impl ContractCall {
-    pub fn encode(&self) -> Vec<u8> {
+    /// Serialise to the wire format used in `Transaction::coinbase_data`.
+    pub fn encode(&self) -> Result<Vec<u8>, bincode::Error> {
         let mut out = CONTRACT_CALL_PREFIX.to_vec();
-        out.extend_from_slice(&bincode::serialize(self).expect("ContractCall encode"));
-        out
+        out.extend_from_slice(&bincode::serialize(self)?);
+        Ok(out)
     }
 
     pub fn decode(data: &[u8]) -> Option<Self> {
@@ -79,7 +81,7 @@ mod tests {
             value: 0,
             gas_limit: 100_000,
         };
-        let encoded = cd.encode();
+        let encoded = cd.encode().unwrap();
         let decoded = ContractDeploy::decode(&encoded).unwrap();
         assert_eq!(cd, decoded);
     }
@@ -92,7 +94,7 @@ mod tests {
             value: 1_000,
             gas_limit: 50_000,
         };
-        let encoded = cc.encode();
+        let encoded = cc.encode().unwrap();
         let decoded = ContractCall::decode(&encoded).unwrap();
         assert_eq!(cc, decoded);
     }

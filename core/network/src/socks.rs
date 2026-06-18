@@ -104,7 +104,10 @@ async fn socks5_connect(proxy: SocketAddr, host: String, port: u16) -> std::io::
             s.read_exact(&mut tail).await?;
         }
         0x04 => { s.read_exact(&mut [0u8; 18]).await?; }
-        _ => {}
+        atyp => return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("SOCKS5 unknown ATYP in response: {atyp:#04x}"),
+        )),
     }
     Ok(s)
 }

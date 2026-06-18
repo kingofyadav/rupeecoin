@@ -2,7 +2,7 @@ pub mod checkpoints;
 pub mod finality;
 pub mod slashing;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use rupeecoin_crypto::{hash_data, Hash, PublicKey, VrfProof};
 use rupeecoin_staking::ValidatorRegistry;
@@ -50,12 +50,22 @@ pub fn select_proposer(slot: u64, prev_vrf_output: &Hash, active_count: usize) -
     if active_count == 0 {
         return 0;
     }
-    let mut buf = [0u8; 40];
-    buf[..32].copy_from_slice(prev_vrf_output.as_bytes());
-    buf[32..].copy_from_slice(&slot.to_le_bytes());
-    let seed = hash_data(&buf);
-    let idx = u64::from_le_bytes(seed.as_bytes()[..8].try_into().unwrap());
-    (idx % active_count as u64) as usize
+    let n = active_count as u64;
+    // Rejection sampling eliminates modulo bias: threshold = 2^64 % n.
+    // Values in [0, threshold) are "bad" (over-represented); rehash and retry.
+    let threshold = n.wrapping_neg() % n;
+    for attempt in 0u8..=32 {
+        let mut buf = [0u8; 41];
+        buf[..32].copy_from_slice(prev_vrf_output.as_bytes());
+        buf[32..40].copy_from_slice(&slot.to_le_bytes());
+        buf[40] = attempt;
+        let seed = hash_data(&buf);
+        let idx = u64::from_le_bytes(seed.as_bytes()[..8].try_into().unwrap());
+        if idx >= threshold {
+            return (idx % n) as usize;
+        }
+    }
+    0
 }
 
 /// Verify the VRF proof embedded in a block.
@@ -153,9 +163,10 @@ impl AttestationPool {
     }
 
     /// Whether `block_hash` at `slot` has reached 2/3 supermajority.
+    /// Returns `true` in bootstrap mode (no validators yet) so the chain can start.
     pub fn is_justified(&self, slot: u64, block_hash: &Hash, total_stake: u64) -> bool {
         if total_stake == 0 {
-            return false;
+            return true; // bootstrap: no validators, auto-justify
         }
         let att = self.attesting_stake(slot, block_hash);
         att * JUSTIFY_DENOMINATOR >= total_stake * JUSTIFY_NUMERATOR
@@ -179,6 +190,8 @@ pub struct ConsensusState {
     pub attestation_pool: AttestationPool,
     pub finality: FinalityTracker,
     pub slashing_detector: SlashingDetector,
+    /// Slashing evidence discovered during block processing, pending on-chain inclusion.
+    pub pending_slashing: Vec<SlashingEvidence>,
     /// LMD-GHOST: latest attestation (slot, block_hash) per validator address.
     pub latest_messages: HashMap<Hash, (u64, Hash)>,
     /// LMD-GHOST: known block → parent mapping (for ancestor traversal).
@@ -193,6 +206,7 @@ impl ConsensusState {
             attestation_pool: AttestationPool::new(),
             finality: FinalityTracker::new(),
             slashing_detector: SlashingDetector::new(),
+            pending_slashing: Vec::new(),
             latest_messages: HashMap::new(),
             known_block_parents: HashMap::new(),
             known_block_children: HashMap::new(),
@@ -220,7 +234,23 @@ impl ConsensusState {
             if att.slot > entry.0 {
                 *entry = (att.slot, att.block_hash);
             }
-            let _ = self.attestation_pool.add(att.clone(), registry);
+            match self.attestation_pool.add(att.clone(), registry) {
+                Ok(()) => {
+                    // Also feed into the slashing detector to catch equivocation.
+                    if let Some(evidence) = self.slashing_detector.record_attestation(att.clone()) {
+                        self.pending_slashing.push(evidence);
+                    }
+                }
+                Err(ConsensusError::DuplicateAttestation(_)) => {
+                    // Could be equivocation — escalate to slashing detector.
+                    if let Some(evidence) = self.slashing_detector.record_attestation(att.clone()) {
+                        self.pending_slashing.push(evidence);
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("attestation rejected in block: {e}");
+                }
+            }
         }
 
         // Check if this slot's block is now justified.
@@ -232,13 +262,16 @@ impl ConsensusState {
             self.finality.justify(epoch, slot, block_hash);
         }
 
-        // Prune attestations older than one finalized epoch.
+        // Prune attestations and slashing records older than one finalized epoch.
         let prune_from = self
             .finality
             .last_finalized_epoch()
             .saturating_sub(1)
             .saturating_mul(SLOTS_PER_EPOCH);
         self.attestation_pool.prune(prune_from);
+        let prune_slot = slot.saturating_sub(SLOTS_PER_EPOCH * 2);
+        self.slashing_detector.prune(prune_slot);
+        self.finality.prune_old_checkpoints();
     }
 
     /// Add an out-of-block attestation (from the network) and return whether it
@@ -339,10 +372,15 @@ impl ConsensusState {
     }
 
     /// Return true if `hash` is `root` or a descendant of `root`.
+    /// Uses a visited set to terminate on cycles in `known_block_parents`.
     fn is_in_subtree(&self, mut hash: Hash, root: Hash) -> bool {
+        let mut visited = HashSet::new();
         loop {
             if hash == root {
                 return true;
+            }
+            if !visited.insert(hash) {
+                return false; // cycle detected
             }
             match self.known_block_parents.get(&hash) {
                 Some(&parent) => hash = parent,

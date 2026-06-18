@@ -130,9 +130,9 @@ pub fn rpc20_bytecode() -> Vec<u8> {
     a.op(Op::Caller);
     a.op(Op::Dup3); // spender
     // compute: 0x0002.. + (caller*A ^ spender*B)
-    a.push8(0x517c_c1b7_2722_0a95).op(Op::Mul); // spender*B
+    a.push8(0x9e37_79b9_7f4a_7c15).op(Op::Mul); // spender*B
     a.op(Op::Swap1);
-    a.push8(0x517c_c1b7_2722_0a95).op(Op::Mul); // caller*A  (using same mult for simplicity)
+    a.push8(0x517c_c1b7_2722_0a95).op(Op::Mul); // caller*A
     a.op(Op::Xor);
     a.push8(0x0002_0000_0000_0000).op(Op::Add); // slot
     // stack: [spender, amount, slot]
@@ -153,7 +153,7 @@ pub fn rpc20_bytecode() -> Vec<u8> {
     a.push8(8).op(Op::MLoad);  // owner
     a.push8(16).op(Op::MLoad); // spender
     // compute allowance slot same as approve
-    a.op(Op::Dup1).push8(0x517c_c1b7_2722_0a95).op(Op::Mul); // spender*B
+    a.op(Op::Dup1).push8(0x9e37_79b9_7f4a_7c15).op(Op::Mul); // spender*B
     a.op(Op::Dup3).push8(0x517c_c1b7_2722_0a95).op(Op::Mul); // owner*A
     a.op(Op::Xor).push8(0x0002_0000_0000_0000).op(Op::Add);
     a.op(Op::SLoad);
@@ -161,51 +161,78 @@ pub fn rpc20_bytecode() -> Vec<u8> {
     a.push8(8).push8(0).op(Op::Return);
 
     // ── transferFrom(from, to, amount) ───────────────────────────────────
+    // H-18, H-19, H-53: correct allowance slot (from*A ^ caller*B), balance
+    // check before allowance deduction, strict > check, overflow guard on credit.
     a.label("transferFrom");
     a.op(Op::Pop);
-    a.push8(8).op(Op::MLoad);  // from
-    a.push8(16).op(Op::MLoad); // to
-    a.push8(24).op(Op::MLoad); // amount
-    // check allowance[from][caller] >= amount
-    a.op(Op::Dup3); // from
+    a.push8(8).op(Op::MLoad);   // from
+    a.push8(16).op(Op::MLoad);  // to
+    a.push8(24).op(Op::MLoad);  // amount
+    // stack: [from, to, amount]
+
+    // compute allowance_slot(from, caller) = 0x0002.. + from*A ^ caller*B
+    a.op(Op::Dup3);                              // from  (Dup3=peek2=bottom of stack)
+    a.push8(0x517c_c1b7_2722_0a95).op(Op::Mul); // from*A
     a.op(Op::Caller);
-    a.op(Op::Dup1).push8(0x517c_c1b7_2722_0a95).op(Op::Mul); // caller*B
-    a.op(Op::Dup3).push8(0x517c_c1b7_2722_0a95).op(Op::Mul); // from*A
-    a.op(Op::Xor).push8(0x0002_0000_0000_0000).op(Op::Add);
-    // stack: [from, to, amount, from, caller, allowance_slot]
-    a.op(Op::Dup1).op(Op::SLoad); // [... allowance_slot, allowance]
-    a.op(Op::Dup3).op(Op::Lt);    // amount < allowance?
-    a.op(Op::IsZero).push_label("transferFrom_revert").op(Op::JumpI);
-    // deduct allowance
-    a.op(Op::Dup1).op(Op::SLoad); // reload allowance
-    a.op(Op::Dup4).op(Op::Sub);   // allowance - amount
-    a.op(Op::Swap1).op(Op::SStore);
+    a.push8(0x9e37_79b9_7f4a_7c15).op(Op::Mul); // caller*B
+    a.op(Op::Xor);
+    a.push8(0x0002_0000_0000_0000).op(Op::Add); // all_slot
+    // stack: [from, to, amount, all_slot]
+
+    // load allowance; check amount > allowance → revert
+    a.op(Op::Dup1).op(Op::SLoad);              // [from,to,amount,all_slot,allowance]
+    a.op(Op::Dup3);                             // amount  (peek2=stack[2]=amount ✓)
+    a.op(Op::Gt);                               // amount > allowance?
+    a.push_label("transferFrom_revert").op(Op::JumpI);
+    // not taken: [from, to, amount, all_slot]
+
+    // compute from_slot = 0x0001.. + from*A; from is at index 0 (peek3 of 4-item stack)
+    a.op(Op::Dup4);                              // from  (peek3=stack[0]=from ✓)
+    a.push8(0x517c_c1b7_2722_0a95).op(Op::Mul);
+    a.push8(0x0001_0000_0000_0000).op(Op::Add); // from_slot
+    // stack: [from, to, amount, all_slot, from_slot]
+
+    // load from_bal; check amount > from_bal → revert (H-19: balance before allowance)
+    a.op(Op::Dup1).op(Op::SLoad);              // [from,to,amount,all_slot,from_slot,from_bal]
+    a.op(Op::Dup4);                             // amount  (peek3=stack[2]=amount ✓)
+    a.op(Op::Gt);                               // amount > from_bal?
+    a.push_label("transferFrom_revert").op(Op::JumpI);
+    // not taken: [from, to, amount, all_slot, from_slot]
+
     // deduct from-balance
-    // stack: [from, to, amount, from, caller]
-    a.op(Op::Pop).op(Op::Pop); // drop from, caller duplicates
+    a.op(Op::Dup1).op(Op::SLoad);              // [from,to,amount,all_slot,from_slot,from_bal]
+    a.op(Op::Dup4);                             // amount  (peek3=stack[2]=amount ✓)
+    a.op(Op::Sub);                              // from_bal - amount
+    a.op(Op::Swap1).op(Op::SStore);            // storage[from_slot]=from_bal-amount
+    // stack: [from, to, amount, all_slot]
+
+    // deduct allowance
+    a.op(Op::Dup1).op(Op::SLoad);              // [from,to,amount,all_slot,allowance]
+    a.op(Op::Dup3);                             // amount  (peek2=stack[2]=amount ✓)
+    a.op(Op::Sub);                              // allowance - amount
+    a.op(Op::Swap1).op(Op::SStore);            // storage[all_slot]=allowance-amount
     // stack: [from, to, amount]
-    a.op(Op::Dup3);
-    a.push8(0x517c_c1b7_2722_0a95).op(Op::Mul).push8(0x0001_0000_0000_0000).op(Op::Add);
-    a.op(Op::Dup1).op(Op::SLoad);
-    a.op(Op::Dup3).op(Op::Gt); // from_balance > amount?
-    a.op(Op::IsZero).push_label("transferFrom_revert").op(Op::JumpI);
-    a.op(Op::Dup1).op(Op::SLoad);
-    a.op(Op::Dup3).op(Op::Sub);
-    a.op(Op::Swap1).op(Op::SStore);
-    // add to-balance
-    // stack: [from, to, amount]
-    a.op(Op::Dup2);
-    a.push8(0x517c_c1b7_2722_0a95).op(Op::Mul).push8(0x0001_0000_0000_0000).op(Op::Add);
-    a.op(Op::Dup1).op(Op::SLoad);
-    a.op(Op::Dup3).op(Op::Add);
-    a.op(Op::Swap1).op(Op::SStore);
+
+    // add to-balance with overflow check
+    a.op(Op::Dup2);                              // to  (peek1=stack[1]=to ✓)
+    a.push8(0x517c_c1b7_2722_0a95).op(Op::Mul);
+    a.push8(0x0001_0000_0000_0000).op(Op::Add); // to_slot
+    // stack: [from, to, amount, to_slot]
+    a.op(Op::Dup1).op(Op::SLoad);              // [from,to,amount,to_slot,to_bal]
+    a.op(Op::Dup3);                             // amount  (peek2=stack[2]=amount ✓)
+    a.op(Op::AddOv);                            // [from,to,amount,to_slot,result,overflow]
+    a.push_label("transferFrom_revert").op(Op::JumpI); // revert on overflow
+    // not taken: [from,to,amount,to_slot,result]
+    a.op(Op::Swap1).op(Op::SStore);            // storage[to_slot]=result
+
+    // return 1
     a.push8(1).push8(0).op(Op::MStore);
     a.push8(8).push8(0).op(Op::Return);
 
     a.label("transferFrom_revert");
     a.push8(0).push8(0).op(Op::Revert);
 
-    a.build()
+    a.build().expect("all labels defined in rpc20_bytecode")
 }
 
 /// Populate initial storage for a freshly deployed RPC-20 token.

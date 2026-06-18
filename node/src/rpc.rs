@@ -4,9 +4,10 @@
 /// All state is read-only except `POST /rpc/privacy_tx`.
 use std::sync::{Arc, Mutex};
 
+use anyhow::Context as _;
 use axum::{
     body::Bytes,
-    extract::{Query, State},
+    extract::{DefaultBodyLimit, Query, State},
     http::StatusCode,
     response::{IntoResponse, Json, Response},
     routing::{get, post},
@@ -63,6 +64,8 @@ pub struct RpcChainSnapshot {
 pub struct RpcState {
     pub chain_snapshot: Arc<Mutex<RpcChainSnapshot>>,
     pub store: Arc<ChainStore>,
+    /// Chain ID used to reject transactions from foreign networks.
+    pub chain_id: u32,
     /// Pending privacy transactions submitted by wallets.
     pub pending_privacy_txs: Arc<Mutex<Vec<PrivacyTransaction>>>,
     /// Pending transparent transactions submitted via HTTP (JS SDK / explorer).
@@ -148,23 +151,25 @@ async fn get_shielded_outputs(
     State(state): State<Arc<RpcState>>,
     Query(params): Query<PaginationParams>,
 ) -> Result<impl IntoResponse, RpcError> {
+    let count = params.count.min(1000);
     let outputs = state
         .store
-        .get_shielded_outputs(params.start, params.count)
+        .get_shielded_outputs(params.start, count)
         .map_err(|e| RpcError(e.to_string()))?;
 
     let items: Vec<ShieldedOutputItem> = outputs
         .into_iter()
         .map(|(idx, out)| {
             let commitment_hex = hex::encode(out.commitment.0.as_bytes());
-            let enc_bytes = bincode::serialize(&out.encrypted_note).unwrap_or_default();
-            ShieldedOutputItem {
+            let enc_bytes = bincode::serialize(&out.encrypted_note)
+                .map_err(|e| RpcError(format!("serialize note: {e}")))?;
+            Ok(ShieldedOutputItem {
                 index: idx,
                 commitment_hex,
                 encrypted_note_bytes: hex::encode(&enc_bytes),
-            }
+            })
         })
-        .collect();
+        .collect::<Result<Vec<_>, RpcError>>()?;
 
     Ok(Json(items))
 }
@@ -383,7 +388,20 @@ async fn submit_tx(
     let raw = hex::decode(body.as_ref()).map_err(|e| RpcError(format!("hex decode: {e}")))?;
     let tx: Transaction =
         bincode::deserialize(&raw).map_err(|e| RpcError(format!("bincode decode: {e}")))?;
-    state.pending_txs.lock().unwrap().push(tx);
+    if tx.inputs.is_empty() {
+        return Err(RpcError("transaction has no inputs".into()));
+    }
+    if tx.chain_id != state.chain_id {
+        return Err(RpcError(format!(
+            "wrong chain_id: got {}, expected {}",
+            tx.chain_id, state.chain_id
+        )));
+    }
+    let mut q = state.pending_txs.lock().unwrap();
+    if q.len() >= 4096 {
+        return Err(RpcError("mempool full".into()));
+    }
+    q.push(tx);
     Ok(Json(json!({"status": "accepted"})))
 }
 
@@ -437,7 +455,10 @@ struct UtxoEntry {
     txid: String,
     vout: u32,
     amount_micro: u64,
-    amount_rpc: f64,
+    /// Integer whole-coin part (amount_micro / 100_000_000).
+    amount_rpc_whole: u64,
+    /// Integer fractional part (amount_micro % 100_000_000), 8-digit precision.
+    amount_rpc_frac: u64,
 }
 
 async fn get_utxos(
@@ -446,7 +467,8 @@ async fn get_utxos(
 ) -> Result<impl IntoResponse, RpcError> {
     // Accept both hex (40 chars) and Base58Check.
     let addr = if params.addr.len() == 40 && params.addr.chars().all(|c| c.is_ascii_hexdigit()) {
-        let bytes = hex::decode(&params.addr).unwrap();
+        let bytes = hex::decode(&params.addr)
+            .map_err(|_| RpcError("invalid hex address".into()))?;
         let mut arr = [0u8; 20];
         arr.copy_from_slice(&bytes);
         Address(arr)
@@ -466,7 +488,8 @@ async fn get_utxos(
             txid: hex::encode(op.txid.as_bytes()),
             vout: op.vout,
             amount_micro: out.amount,
-            amount_rpc: out.amount as f64 / 1e8,
+            amount_rpc_whole: out.amount / 100_000_000,
+            amount_rpc_frac:  out.amount % 100_000_000,
         })
         .collect();
 
@@ -488,13 +511,17 @@ pub fn router(state: Arc<RpcState>) -> Router {
         .route("/rpc/nonce", get(get_nonce))
         .route("/rpc/validator_info", get(get_validator_info))
         .route("/rpc/status", get(get_status))
+        .layer(DefaultBodyLimit::max(512 * 1024))
         .with_state(state)
 }
 
-pub async fn serve(state: Arc<RpcState>, port: u16) {
+pub async fn serve(state: Arc<RpcState>, port: u16) -> anyhow::Result<()> {
     let app = router(state);
     let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
     tracing::info!("RPC listening on http://{addr}");
-    let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
-    axum::serve(listener, app).await.unwrap();
+    let listener = tokio::net::TcpListener::bind(addr)
+        .await
+        .with_context(|| format!("binding RPC port {port}"))?;
+    axum::serve(listener, app).await.context("axum serve")?;
+    Ok(())
 }

@@ -13,6 +13,7 @@ use chacha20poly1305::{
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use zeroize::{Zeroize, Zeroizing};
 
 use rupeecoin_crypto::Hash;
 use rupeecoin_privacy::{
@@ -48,16 +49,6 @@ pub enum KeystoreError {
 }
 
 // ── On-disk structures ─────────────────────────────────────────────────────────
-
-#[derive(Serialize, Deserialize)]
-struct KeystoreV1 {
-    version: u32,
-    spend_key_hex: String,
-    nullifier_key_hex: String,
-    view_public_key_hex: String,
-    view_secret_key_hex: String,
-    payment_address_hex: String,
-}
 
 /// Inner plaintext for v2/v3 — extends v1 with optional HD fields.
 #[derive(Serialize, Deserialize)]
@@ -99,14 +90,22 @@ pub struct LoadedKeystore {
     pub hd_receive_index: u32,
 }
 
+impl Drop for LoadedKeystore {
+    fn drop(&mut self) {
+        if let Some(ref mut seed) = self.hd_master_seed {
+            seed.zeroize();
+        }
+    }
+}
+
 // ── Crypto helpers ─────────────────────────────────────────────────────────────
 
-fn derive_key(password: &[u8], salt: &[u8]) -> [u8; ARGON2_OUT_LEN] {
+fn derive_key(password: &[u8], salt: &[u8]) -> Zeroizing<[u8; ARGON2_OUT_LEN]> {
     let params =
         Params::new(ARGON2_MEM_KIB, ARGON2_ITERS, ARGON2_LANES, Some(ARGON2_OUT_LEN)).unwrap();
     let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
-    let mut key = [0u8; ARGON2_OUT_LEN];
-    argon2.hash_password_into(password, salt, &mut key).expect("argon2 params are valid");
+    let mut key = Zeroizing::new([0u8; ARGON2_OUT_LEN]);
+    argon2.hash_password_into(password, salt, key.as_mut()).expect("argon2 params are valid");
     key
 }
 
@@ -128,8 +127,10 @@ fn decrypt(ct: &[u8], key: &[u8; 32], nonce: &[u8; 24]) -> Result<Vec<u8>, Keyst
         .map_err(|_| KeystoreError::DecryptionFailed)
 }
 
-fn prompt_password(prompt: &str) -> Result<String, KeystoreError> {
-    rpassword::prompt_password(prompt).map_err(|e| KeystoreError::Passphrase(e.to_string()))
+fn prompt_password(prompt: &str) -> Result<Zeroizing<String>, KeystoreError> {
+    rpassword::prompt_password(prompt)
+        .map(Zeroizing::new)
+        .map_err(|e| KeystoreError::Passphrase(e.to_string()))
 }
 
 // ── Bundle ↔ inner ────────────────────────────────────────────────────────────
@@ -215,7 +216,7 @@ pub fn save(
     let key = derive_key(password.as_bytes(), &salt);
     let inner = bundle_to_inner(bundle, hd_seed, receive_index);
     let plaintext = serde_json::to_vec(&inner)?;
-    let ct = encrypt(&plaintext, &key, &nonce_bytes);
+    let ct = encrypt(&plaintext, &*key, &nonce_bytes);
 
     let file = EncryptedKeystore {
         version: 3,
@@ -223,7 +224,10 @@ pub fn save(
         nonce_hex: hex::encode(nonce_bytes),
         ciphertext_hex: hex::encode(ct),
     };
-    std::fs::write(path, serde_json::to_string_pretty(&file)?)?;
+    // Atomic write: write to a temp file first, then rename to prevent partial writes.
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, serde_json::to_string_pretty(&file)?)?;
+    std::fs::rename(&tmp, path)?;
     Ok(())
 }
 
@@ -247,23 +251,17 @@ pub fn load(path: &Path) -> Result<LoadedKeystore, KeystoreError> {
                 .map_err(|_| KeystoreError::InvalidKey("bad ciphertext".into()))?;
 
             let key = derive_key(password.as_bytes(), &salt);
-            let pt = decrypt(&ct, &key, &nonce)?;
+            let pt = decrypt(&ct, &*key, &nonce)?;
             let inner: KeystoreInner = serde_json::from_slice(&pt)?;
             inner_to_loaded(&inner)
         }
-        1 => {
-            let file: KeystoreV1 = serde_json::from_str(&json)?;
-            let inner = KeystoreInner {
-                spend_key_hex: file.spend_key_hex,
-                nullifier_key_hex: file.nullifier_key_hex,
-                view_public_key_hex: file.view_public_key_hex,
-                view_secret_key_hex: file.view_secret_key_hex,
-                payment_address_hex: file.payment_address_hex,
-                hd_master_seed_hex: None,
-                hd_receive_index: 0,
-            };
-            inner_to_loaded(&inner)
-        }
-        v => Err(KeystoreError::InvalidKey(format!("unknown keystore version {v}"))),
+        1 => Err(KeystoreError::InvalidKey(
+            "keystore v1 stores private keys in plaintext and is no longer supported. \
+             Please run `rupeecoin-wallet generate` to create a v3 encrypted keystore.".into(),
+        )),
+        v => Err(KeystoreError::InvalidKey(format!(
+            "unsupported keystore version {v}; expected version 2 or 3. \
+             Please run `rupeecoin-wallet generate` to recreate your keystore."
+        ))),
     }
 }

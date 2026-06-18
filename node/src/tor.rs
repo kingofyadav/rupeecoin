@@ -162,11 +162,11 @@ pub async fn check_proxy_reachability(proxy: SocketAddr) -> Result<(), String> {
         .await
         .map_err(|e| format!("Tor SOCKS5 proxy at {proxy} did not respond: {e}"))?;
 
-    if buf[0] != 0x05 {
+    if buf[0] != 0x05 || buf[1] != 0x00 {
         return Err(format!(
-            "Response from {proxy} does not look like SOCKS5 (first byte {:#04x}); \
+            "SOCKS5 handshake failed with proxy {proxy}: got [{:#04x}, {:#04x}]; \
              check that Tor is running and --tor-socks points at the SOCKS port",
-            buf[0]
+            buf[0], buf[1]
         ));
     }
 

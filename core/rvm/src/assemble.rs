@@ -66,16 +66,15 @@ impl Assembler {
 
     /// Finish assembly: patch all label references and return the bytecode.
     ///
-    /// # Panics
-    /// Panics if a referenced label was never defined.
-    pub fn build(&self) -> Vec<u8> {
+    /// Returns `Err` with the name of the first undefined label encountered.
+    pub fn build(&self) -> Result<Vec<u8>, String> {
         let mut code = self.code.clone();
         for (offset, label) in &self.patches {
             let addr = *self.labels.get(label.as_str())
-                .unwrap_or_else(|| panic!("undefined label: {label}"));
+                .ok_or_else(|| format!("undefined label: {label}"))?;
             code[*offset..*offset + 8].copy_from_slice(&addr.to_be_bytes());
         }
-        code
+        Ok(code)
     }
 
     /// Current byte length of the assembled code.

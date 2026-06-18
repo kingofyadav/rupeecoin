@@ -131,8 +131,11 @@ impl GenesisConfig {
         if self.treasury_address_hex.len() != 40 {
             return Err("treasury_address_hex must be 40 hex chars (20 bytes)".into());
         }
-        hex::decode(&self.treasury_address_hex)
+        let treasury_bytes = hex::decode(&self.treasury_address_hex)
             .map_err(|e| format!("treasury_address_hex is not valid hex: {e}"))?;
+        if treasury_bytes == [0u8; 20] {
+            return Err("treasury_address_hex must not be the zero address".into());
+        }
         if self.halving_interval == 0 {
             return Err("halving_interval must be > 0".into());
         }

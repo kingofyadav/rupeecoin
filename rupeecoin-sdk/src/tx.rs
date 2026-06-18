@@ -3,8 +3,9 @@
 //! Provides `build_transfer` for transparent UTXO transactions.
 //! For shielded transactions use `rupeecoin_privacy::ShieldedTxBuilder` directly.
 
+use anyhow::{bail, Result};
 use rupeecoin_crypto::{KeyPair, Signature};
-use rupeecoin_types::{OutPoint, Transaction, TxInput, TxOutput};
+use rupeecoin_types::{OutPoint, Transaction, TxInput, TxOutput, MAINNET_CHAIN_ID, TESTNET_CHAIN_ID};
 
 /// Build and sign a transparent transfer transaction.
 ///
@@ -25,7 +26,16 @@ pub fn build_transfer(
     chain_id: u32,
     nonce: u64,
     expiry: u64,
-) -> Transaction {
+) -> Result<Transaction> {
+    if chain_id != MAINNET_CHAIN_ID && chain_id != TESTNET_CHAIN_ID {
+        bail!("invalid chain_id {chain_id}: must be {MAINNET_CHAIN_ID} (mainnet) or {TESTNET_CHAIN_ID} (testnet)");
+    }
+    if outpoints.is_empty() {
+        bail!("transaction must have at least one input");
+    }
+    if outputs.is_empty() {
+        bail!("transaction must have at least one output");
+    }
     let mut tx = Transaction {
         version: 1,
         chain_id,
@@ -47,7 +57,7 @@ pub fn build_transfer(
     for input in &mut tx.inputs {
         input.signature = sig.clone();
     }
-    tx
+    Ok(tx)
 }
 
 /// Convert whole RPC coins to micro-RPC (the on-chain unit).

@@ -157,6 +157,17 @@ impl NodeRpc {
         Ok(resp.claimable_rewards)
     }
 
+    /// Fetch the next expected nonce for a transparent address.
+    pub fn nonce(&self, addr_hex: &str) -> Result<u64, RpcClientError> {
+        #[derive(Deserialize)]
+        struct Resp {
+            nonce: u64,
+        }
+        let url = format!("{}/rpc/nonce?addr={}", self.base_url, addr_hex);
+        let resp: Resp = ureq::get(&url).call()?.into_json()?;
+        Ok(resp.nonce)
+    }
+
     /// Fetch unspent transparent UTXOs for a 20-byte address (hex).
     pub fn get_utxos(
         &self,

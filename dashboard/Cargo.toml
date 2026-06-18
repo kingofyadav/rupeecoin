@@ -8,6 +8,7 @@ name = "rupeecoin-dashboard"
 path = "src/main.rs"
 
 [dependencies]
+rupeecoin-crypto = { path = "../core/crypto" }
 clap       = { workspace = true }
 serde      = { workspace = true }
 serde_json = { workspace = true }

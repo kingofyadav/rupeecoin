@@ -27,3 +27,4 @@ bs58              = { workspace = true }
 ureq              = { workspace = true }
 pqcrypto-kyber    = { workspace = true }
 pqcrypto-traits   = { workspace = true }
+zeroize           = { version = "1", features = ["derive"] }

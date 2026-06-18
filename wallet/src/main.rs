@@ -222,7 +222,7 @@ fn cmd_scan(keys_path: &PathBuf, rpc_url: &str) -> anyhow::Result<()> {
         let rpc_value = owned.note.value as f64 / MICRO_RPC_PER_COIN as f64;
         let nf_hex = hex::encode(owned.nullifier.0.as_bytes());
         println!("{:<8}  {:>18.8}  {}…", owned.index, rpc_value, &nf_hex[..16]);
-        total_micro_rpc += owned.note.value;
+        total_micro_rpc = total_micro_rpc.saturating_add(owned.note.value);
     }
     println!("{}", "─".repeat(72));
     println!(
@@ -296,7 +296,8 @@ fn cmd_send(
     })?;
 
     println!("Scanning for spendable notes…");
-    let owned_notes = scanner::scan(&rpc, &ks.bundle.view_key.secret, &ks.bundle.nullifier_key)?;
+    let mut owned_notes = scanner::scan(&rpc, &ks.bundle.view_key.secret, &ks.bundle.nullifier_key)?;
+    owned_notes.sort_by_key(|n| n.note.value);
 
     let (selected, change_micro) = scanner::select_notes(&owned_notes, amount_micro, fee_micro)
         .ok_or_else(|| {
@@ -421,13 +422,13 @@ fn hash_to_felt4(h: &[u8; 32]) -> [u64; 4] {
 /// Derive the Base58Check transparent address at m/HD_RECEIVE/index.
 fn hd_receive_address(master_seed: &[u8; 32], index: u32) -> String {
     let master = HdNode::master(master_seed);
-    let keypair = master.child(HD_RECEIVE).child(index).to_keypair();
+    let keypair = master.child(HD_RECEIVE).expect("depth 1").child(index).expect("depth 2").to_keypair();
     encode_address(&keypair.public_key.to_address())
 }
 
 /// Derive the full keypair at m/HD_RECEIVE/index (for signing).
 fn hd_receive_keypair(master_seed: &[u8; 32], index: u32) -> rupeecoin_crypto::KeyPair {
-    HdNode::master(master_seed).child(HD_RECEIVE).child(index).to_keypair()
+    HdNode::master(master_seed).child(HD_RECEIVE).expect("depth 1").child(index).expect("depth 2").to_keypair()
 }
 
 // ── payment URI parser ────────────────────────────────────────────────────────
@@ -571,9 +572,7 @@ fn cmd_sign_tx(
         })
         .collect();
 
-    // Nonce: use the index of the receive address as a simple monotonic nonce.
-    // The node tracks nonces per address; pass 0 for first tx, then increment.
-    let nonce = ks.hd_receive_index as u64;
+    let nonce = rpc.nonce(&my_addr_hex)?;
 
     let mut tx = Transaction {
         version: 1,

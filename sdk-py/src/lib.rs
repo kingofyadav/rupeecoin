@@ -263,7 +263,8 @@ fn build_tx(
         .collect::<Result<_, String>>()
         .map_err(to_py_err)?;
 
-    let tx = rupeecoin_sdk::tx::build_transfer(&keypair, outpoints, rust_outputs, chain_id, nonce, expiry);
+    let tx = rupeecoin_sdk::tx::build_transfer(&keypair, outpoints, rust_outputs, chain_id, nonce, expiry)
+        .map_err(to_py_err)?;
     let bytes = bincode::serialize(&tx).map_err(to_py_err)?;
     Ok(PyTransaction { hex: hex::encode(bytes) })
 }

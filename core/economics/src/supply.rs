@@ -14,11 +14,10 @@ pub const TAIL_EMISSION: u64 = MICRO_RPC_PER_COIN;
 /// Block reward (in micro-RPC) at a given chain height.
 ///
 /// Schedule:
-///   Era 0 (0 …31 535 999):    50  RPC
-///   Era 1 (31 536 000 …):     25  RPC
+///   Era 0 (0 …31 535 999):    50   RPC
+///   Era 1 (31 536 000 …):     25   RPC
 ///   Era 2 (63 072 000 …):     12.5 RPC
-///   Era 3 (94 608 000 …):      6.25 RPC
-///   Era 4+ (126 144 000+):     1   RPC  (tail emission)
+///   Era 3+ (94 608 000 …):     6.25 RPC, then 1 RPC tail emission after halving 4
 pub fn block_reward(height: u64) -> u64 {
     if height >= HALVING_4 {
         TAIL_EMISSION

@@ -68,7 +68,7 @@ fn bench_state_root(c: &mut Criterion) {
         group.bench_with_input(
             BenchmarkId::new("utxos", n),
             &utxo_set,
-            |b, set| b.iter(|| black_box(set.state_root())),
+            |b, set| b.iter(|| black_box(set.state_root().expect("UTXO serialization failed"))),
         );
     }
 

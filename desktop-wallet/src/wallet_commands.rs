@@ -111,7 +111,9 @@ pub fn advance_address(
     keystore_path: String,
 ) -> Result<WalletInfo, String> {
     let mut inner = keystore::load(&keystore_path, &passphrase)?;
-    inner.receive_index += 1;
+    inner.receive_index = inner.receive_index
+        .checked_add(1)
+        .ok_or_else(|| "receive index overflow".to_string())?;
 
     let (wallet, _kp) = wallet_from_seed(&inner.master_seed_hex, inner.receive_index)?;
     keystore::save(&keystore_path, &inner, &passphrase)?;
@@ -204,12 +206,17 @@ pub fn send_transaction(
         .into_json()
         .map_err(|e| format!("parse UTXOs: {e}"))?;
 
+    let fee_micro: u64 = 10_000; // 0.0001 RPC burned as fee
+    let needed = amount_micro
+        .checked_add(fee_micro)
+        .ok_or_else(|| "amount + fee overflow".to_string())?;
+
     let balance: u64 = utxos.iter().map(|u| u.amount_micro).sum();
-    if balance < amount_micro {
+    if balance < needed {
         return Err(format!(
-            "Insufficient balance: have {:.4} RPC, need {:.4} RPC",
+            "Insufficient balance: have {:.4} RPC, need {:.4} RPC (including fee)",
             balance as f64 / MICRO_RPC_PER_COIN as f64,
-            amount_rpc
+            needed as f64 / MICRO_RPC_PER_COIN as f64,
         ));
     }
 
@@ -228,14 +235,14 @@ pub fn send_transaction(
     let mut selected: Vec<&UtxoEntry> = Vec::new();
     let mut total_in: u64 = 0;
     for u in &sorted {
-        if total_in >= amount_micro {
+        if total_in >= needed {
             break;
         }
         selected.push(u);
         total_in += u.amount_micro;
     }
 
-    let change = total_in - amount_micro; // fee is implicit (burned)
+    let change = total_in - amount_micro - fee_micro;
     let mut outputs = vec![TxOutput { amount: amount_micro, recipient }];
     if change > 0 {
         outputs.push(TxOutput { amount: change, recipient: sender_addr });

@@ -97,6 +97,13 @@ pub fn rpc1155_bytecode() -> Vec<u8> {
     a.push8(16).op(Op::MLoad);  // [from, id]
     a.push8(24).op(Op::MLoad);  // [from, id, amount]
 
+    // H-25: caller must be `from`
+    a.op(Op::Caller);           // [from,id,amount,caller]
+    a.op(Op::Dup4);             // from  (peek3=stack[0]=from ✓)
+    a.op(Op::Eq).op(Op::IsZero); // 1 if caller != from
+    a.push_label("burn1155_revert").op(Op::JumpI);
+    // not taken: [from, id, amount]
+
     // Compute from_slot.
     // Stack: [from, id, amount]; depths: 0=amount, 1=id, 2=from
     a.op(Op::Dup3);  // depth2=from → [from, id, amount, from]
@@ -144,6 +151,13 @@ pub fn rpc1155_bytecode() -> Vec<u8> {
     a.push8(24).op(Op::MLoad);  // [from, to, id]
     a.push8(32).op(Op::MLoad);  // [from, to, id, amount]
 
+    // H-25: caller must be `from`
+    a.op(Op::Caller);           // [from,to,id,amount,caller]
+    a.op(Op::Dup5);             // from  (peek4=stack[0]=from ✓)
+    a.op(Op::Eq).op(Op::IsZero); // 1 if caller != from
+    a.push_label("transfer1155_revert").op(Op::JumpI);
+    // not taken: [from, to, id, amount]
+
     // Compute from_slot.
     // Stack: [from, to, id, amount]; depths: 0=amount, 1=id, 2=to, 3=from
     a.op(Op::Dup4);  // depth3=from → [from, to, id, amount, from]
@@ -186,5 +200,5 @@ pub fn rpc1155_bytecode() -> Vec<u8> {
     a.label("transfer1155_revert");
     a.push8(0).push8(0).op(Op::Revert);
 
-    a.build()
+    a.build().expect("all labels defined in rpc1155_bytecode")
 }

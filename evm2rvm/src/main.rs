@@ -46,10 +46,14 @@ const EVM_OR:        u8 = 0x17;
 const EVM_XOR:       u8 = 0x18;
 const EVM_NOT:       u8 = 0x19;
 const EVM_SHL:       u8 = 0x1B;
-const EVM_SHR:       u8 = 0x1C;
-const EVM_KECCAK256: u8 = 0x20;
-const EVM_CALLER:    u8 = 0x33;
-const EVM_CALLVALUE: u8 = 0x34;
+const EVM_SHR:          u8 = 0x1C;
+const EVM_SAR:          u8 = 0x1D;
+const EVM_CALLDATALOAD: u8 = 0x35;
+const EVM_CALLDATASIZE: u8 = 0x36;
+const EVM_CALLDATACOPY: u8 = 0x37;
+const EVM_KECCAK256:    u8 = 0x20;
+const EVM_CALLER:       u8 = 0x33;
+const EVM_CALLVALUE:    u8 = 0x34;
 const EVM_NUMBER:    u8 = 0x43;
 const EVM_TIMESTAMP: u8 = 0x42;
 const EVM_CHAINID:   u8 = 0x46;
@@ -108,6 +112,39 @@ pub fn transpile(evm: &[u8]) -> TranspileResult {
             EVM_NOT    => { rvm.push(Op::Not as u8); }
             EVM_SHL    => { rvm.push(Op::Shl as u8); }
             EVM_SHR    => { rvm.push(Op::Shr as u8); }
+            // M-10: EVM SAR (arithmetic right shift) maps 1:1 to RVM Sar
+            EVM_SAR    => { rvm.push(Op::Sar as u8); }
+
+            // M-11: EVM calldata opcodes — calldata lives in memory[0..] in RVM
+            EVM_CALLDATALOAD => {
+                warns.push(format!(
+                    "offset 0x{:04X}: CALLDATALOAD mapped to MLOAD (calldata is at memory[0..] in RVM; word-size 8 bytes vs 32)",
+                    i - 1
+                ));
+                rvm.push(Op::MLoad as u8);
+            }
+            EVM_CALLDATASIZE => {
+                warns.push(format!(
+                    "offset 0x{:04X}: CALLDATASIZE has no RVM equivalent → REVERT stub",
+                    i - 1
+                ));
+                rvm.push(Op::Push8 as u8);
+                rvm.extend_from_slice(&0u64.to_be_bytes());
+                rvm.push(Op::Push8 as u8);
+                rvm.extend_from_slice(&0u64.to_be_bytes());
+                rvm.push(Op::Revert as u8);
+            }
+            EVM_CALLDATACOPY => {
+                warns.push(format!(
+                    "offset 0x{:04X}: CALLDATACOPY has no RVM equivalent → REVERT stub",
+                    i - 1
+                ));
+                rvm.push(Op::Push8 as u8);
+                rvm.extend_from_slice(&0u64.to_be_bytes());
+                rvm.push(Op::Push8 as u8);
+                rvm.extend_from_slice(&0u64.to_be_bytes());
+                rvm.push(Op::Revert as u8);
+            }
 
             // ── crypto ────────────────────────────────────────────────────
             EVM_KECCAK256 => {

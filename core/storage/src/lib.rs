@@ -1,5 +1,5 @@
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use rocksdb::{ColumnFamily, ColumnFamilyDescriptor, Options, WriteBatch, DB};
 use rupeecoin_consensus::WeakSubjectivityCheckpoint;
@@ -18,6 +18,7 @@ const CF_SHIELDED_OUTPUTS: &str = "shielded_outs"; // leaf index (u64 BE) → Sh
 const CF_CHECKPOINTS: &str = "checkpoints"; // u64 BE height → WeakSubjectivityCheckpoint
 const CF_CONTRACT_STORAGE: &str = "contract_storage"; // addr_u64_le ++ slot_u64_le → val_u64_le
 const CF_CONTRACT_CODE: &str = "contract_code"; // addr_u64_le(8B) → bytecode bytes
+const CF_ADDRESS_INDEX: &str = "addr_index"; // Address(20B) → bincode Vec<OutPoint>
 
 const META_TIP_HASH: &[u8] = b"tip_hash";
 const META_HEIGHT: &[u8] = b"height";
@@ -36,6 +37,16 @@ pub enum StorageError {
 
 pub struct ChainStore {
     db: Arc<DB>,
+    /// Serializes note_count read-modify-write to prevent races under concurrent block application.
+    write_lock: Arc<Mutex<()>>,
+}
+
+impl Drop for ChainStore {
+    fn drop(&mut self) {
+        // Flush memtables to SST files on clean shutdown so the secondary reader
+        // sees the latest data without waiting for compaction.
+        let _ = self.db.flush();
+    }
 }
 
 impl ChainStore {
@@ -55,11 +66,12 @@ impl ChainStore {
             CF_CHECKPOINTS,
             CF_CONTRACT_STORAGE,
             CF_CONTRACT_CODE,
+            CF_ADDRESS_INDEX,
         ]
         .map(|name| ColumnFamilyDescriptor::new(name, Options::default()));
 
         let db = DB::open_cf_descriptors(&opts, path, cfs)?;
-        Ok(ChainStore { db: Arc::new(db) })
+        Ok(ChainStore { db: Arc::new(db), write_lock: Arc::new(Mutex::new(())) })
     }
 
     /// Open the store in read-only mode — safe to use concurrently with a running node.
@@ -77,9 +89,10 @@ impl ChainStore {
             CF_CHECKPOINTS,
             CF_CONTRACT_STORAGE,
             CF_CONTRACT_CODE,
+            CF_ADDRESS_INDEX,
         ];
         let db = DB::open_cf_for_read_only(&opts, path, cf_names, false)?;
-        Ok(ChainStore { db: Arc::new(db) })
+        Ok(ChainStore { db: Arc::new(db), write_lock: Arc::new(Mutex::new(())) })
     }
 
     /// Open the store as a RocksDB secondary instance.  `secondary_path` is a
@@ -99,10 +112,11 @@ impl ChainStore {
             CF_CHECKPOINTS,
             CF_CONTRACT_STORAGE,
             CF_CONTRACT_CODE,
+            CF_ADDRESS_INDEX,
         ];
         std::fs::create_dir_all(secondary_path).ok();
         let db = DB::open_cf_as_secondary(&opts, primary_path, secondary_path, cf_names)?;
-        Ok(ChainStore { db: Arc::new(db) })
+        Ok(ChainStore { db: Arc::new(db), write_lock: Arc::new(Mutex::new(())) })
     }
 
     /// Pull the latest data from the primary node (no-op when opened normally).
@@ -281,6 +295,9 @@ impl ChainStore {
         }
 
         // Privacy pool: nullifiers + note commitments.
+        // Hold the write lock for the note_count read-modify-write so concurrent
+        // callers cannot interleave and produce duplicate leaf indices.
+        let _write_guard = self.write_lock.lock().expect("write_lock poisoned");
         let mut note_count = self.get_note_commitment_count()?;
         for privacy_tx in &block.privacy_txs {
             for input in &privacy_tx.shielded_inputs {
@@ -350,8 +367,8 @@ impl ChainStore {
     /// Compose the RocksDB key for a contract storage slot.
     fn contract_storage_key(contract_addr: u64, slot: u64) -> [u8; 16] {
         let mut key = [0u8; 16];
-        key[..8].copy_from_slice(&contract_addr.to_le_bytes());
-        key[8..].copy_from_slice(&slot.to_le_bytes());
+        key[..8].copy_from_slice(&contract_addr.to_be_bytes());
+        key[8..].copy_from_slice(&slot.to_be_bytes());
         key
     }
 
@@ -362,7 +379,7 @@ impl ChainStore {
     ) -> Result<std::collections::HashMap<u64, u64>, StorageError> {
         use rocksdb::IteratorMode;
         let cf = self.cf(CF_CONTRACT_STORAGE)?;
-        let prefix = contract_addr.to_le_bytes();
+        let prefix = contract_addr.to_be_bytes();
         let mut map = std::collections::HashMap::new();
         // Iterate from the first key with this prefix.
         for item in self.db.iterator_cf(cf, IteratorMode::From(&prefix, rocksdb::Direction::Forward)) {
@@ -370,8 +387,8 @@ impl ChainStore {
             if k.len() != 16 || k[..8] != prefix {
                 break; // past this contract's keys
             }
-            let slot = u64::from_le_bytes(k[8..16].try_into().unwrap());
-            let val = u64::from_le_bytes(
+            let slot = u64::from_be_bytes(k[8..16].try_into().unwrap());
+            let val = u64::from_be_bytes(
                 v.as_ref()
                     .try_into()
                     .map_err(|_| StorageError::Corruption("contract storage value corrupt".into()))?,
@@ -391,7 +408,7 @@ impl ChainStore {
         let cf = self.cf(CF_CONTRACT_STORAGE)?;
         for (&slot, &val) in storage {
             let key = Self::contract_storage_key(contract_addr, slot);
-            batch.put_cf(cf, &key, &val.to_le_bytes());
+            batch.put_cf(cf, &key, &val.to_be_bytes());
         }
         self.db.write(batch)?;
         Ok(())
@@ -399,16 +416,16 @@ impl ChainStore {
 
     // ── RVM contract bytecode (CF_CONTRACT_CODE) ─────────────────────────────
 
-    /// Persist the bytecode of a deployed contract.  Key = addr as 8-byte LE.
+    /// Persist the bytecode of a deployed contract.  Key = addr as 8-byte BE.
     pub fn save_contract_code(&self, contract_addr: u64, bytecode: &[u8]) -> Result<(), StorageError> {
-        let key = contract_addr.to_le_bytes();
+        let key = contract_addr.to_be_bytes();
         self.db.put_cf(self.cf(CF_CONTRACT_CODE)?, &key, bytecode)?;
         Ok(())
     }
 
     /// Load bytecode for `contract_addr`, returning `None` if not deployed.
     pub fn load_contract_code(&self, contract_addr: u64) -> Result<Option<Vec<u8>>, StorageError> {
-        let key = contract_addr.to_le_bytes();
+        let key = contract_addr.to_be_bytes();
         Ok(self.db.get_cf(self.cf(CF_CONTRACT_CODE)?, &key)?)
     }
 

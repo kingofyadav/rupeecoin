@@ -70,14 +70,14 @@ pub enum ChainError {
     InvalidRewardClaim(String),
     #[error("invalid slashing report: {0}")]
     InvalidSlashingReport(String),
+    #[error("invalid attestation signature in block")]
+    InvalidAttestationSignature,
 }
 
 /// Maximum depth at which a chain reorg will be attempted.
 pub const REORG_DEPTH: usize = 32;
 
 /// Reversible UTXO changes made by a single block.
-/// Privacy state (commitment tree, nullifiers) is append-only and not rolled
-/// back — reorgs involving shielded transactions are deferred to Phase 15.
 #[derive(Debug, Clone)]
 pub struct BlockDelta {
     /// UTXOs created by this block (removed on rollback).
@@ -88,6 +88,8 @@ pub struct BlockDelta {
     pub coinbase_added: Vec<OutPoint>,
     /// Addresses whose nonce was incremented (decremented on rollback).
     pub nonce_incremented: Vec<Address>,
+    /// Nullifiers inserted by shielded txs in this block (removed on rollback).
+    pub inserted_nullifiers: Vec<Nullifier>,
 }
 
 pub struct Chain {
@@ -117,6 +119,7 @@ impl Chain {
             removed: vec![],
             coinbase_added: vec![],
             nonce_incremented: vec![],
+            inserted_nullifiers: vec![],
         };
         Chain {
             blocks: vec![genesis],
@@ -150,7 +153,7 @@ impl Chain {
         self.validate(&block, registry)?;
 
         // Compute the delta before applying (so we know which UTXOs existed).
-        let delta = self.compute_delta(&block);
+        let mut delta = self.compute_delta(&block);
         self.utxo_set.apply_block(&block)?;
 
         // Pre-compute privacy apply so we can include the new tree root in the
@@ -158,7 +161,7 @@ impl Chain {
         let height = block.header.height;
         let apply = PrivacyBlockApply::compute(&block.privacy_txs, &self.commitment_tree, height);
 
-        let utxo_root = self.utxo_set.state_root();
+        let utxo_root = self.utxo_set.state_root().expect("UTXO serialization failed");
         let computed = hash_data(
             &[utxo_root.as_bytes().as_slice(), apply.new_tree_root.as_bytes().as_slice()].concat(),
         );
@@ -172,9 +175,12 @@ impl Chain {
         for cm in &apply.new_commitments {
             self.commitment_tree.append(*cm);
         }
+        let mut inserted_nullifiers = Vec::new();
         for (nullifier, _) in &apply.new_nullifiers {
             self.spent_nullifiers.insert(*nullifier);
+            inserted_nullifiers.push(*nullifier);
         }
+        delta.inserted_nullifiers = inserted_nullifiers;
         self.recent_roots.push(apply.new_tree_root);
         if self.recent_roots.len() > ANCHOR_DEPTH + 1 {
             self.recent_roots.remove(0);
@@ -182,15 +188,16 @@ impl Chain {
 
         self.apply_economics(&block, registry);
         self.apply_special_txs(&block, registry);
+        // Push delta and block together so block_deltas[i] always matches blocks[i].
         self.block_deltas.push_back(delta);
         self.blocks.push(block);
-        // Evict old blocks beyond the sliding window to prevent unbounded RAM growth.
+        // Evict old blocks beyond the sliding window; trim both vecs atomically.
         if self.blocks.len() > BLOCK_KEEP_LAST {
             let excess = self.blocks.len() - BLOCK_KEEP_LAST;
-            self.blocks.drain(..excess);
             for _ in 0..excess {
                 self.block_deltas.pop_front();
             }
+            self.blocks.drain(..excess);
         }
         Ok(())
     }
@@ -225,11 +232,10 @@ impl Chain {
             }
         }
 
-        BlockDelta { added, removed, coinbase_added, nonce_incremented }
+        BlockDelta { added, removed, coinbase_added, nonce_incremented, inserted_nullifiers: vec![] }
     }
 
-    /// Undo a block's UTXO changes.  Used for reorg rollback.
-    /// Privacy state (commitment tree, nullifiers) is NOT rolled back.
+    /// Undo a block's UTXO and nullifier changes.  Used for reorg rollback.
     fn undo_utxo_delta(&mut self, delta: &BlockDelta) {
         for op in &delta.added {
             self.utxo_set.remove(op);
@@ -242,6 +248,10 @@ impl Chain {
         }
         for addr in &delta.nonce_incremented {
             self.utxo_set.decrement_nonce(addr);
+        }
+        // Restore spent nullifiers so the shielded notes can be re-spent on the new fork.
+        for nullifier in &delta.inserted_nullifiers {
+            self.spent_nullifiers.remove(nullifier);
         }
     }
 
@@ -309,8 +319,10 @@ impl Chain {
         self.pmfp.add_fees(fee_split.pmfp_contribution);
 
         if height > 0 && slot % SLOTS_PER_EPOCH == 0 {
-            registry.process_epoch_participation(epoch);
-            apply_inactivity_leak(registry, epoch);
+            // Process the epoch that just completed, not the one starting now.
+            let completed_epoch = epoch.saturating_sub(1);
+            registry.process_epoch_participation(completed_epoch);
+            apply_inactivity_leak(registry, completed_epoch);
             self.pmfp.distribute_epoch(registry);
         }
     }
@@ -379,6 +391,14 @@ impl Chain {
             } else {
                 self.utxo_set.validate_transfer(tx, block.header.height)?;
             }
+        }
+
+        // ── Attestation signature verification ────────────────────────────────
+        for att in &block.attestations {
+            let sig_data = Attestation::sig_data(att.slot, &att.block_hash);
+            att.validator_pubkey
+                .verify(sig_data.as_bytes(), &att.signature)
+                .map_err(|_| ChainError::InvalidAttestationSignature)?;
         }
 
         // ── Privacy validation ────────────────────────────────────────────────
@@ -604,7 +624,7 @@ pub fn build_reward_claim(
     amount: u64,
     output_addr: rupeecoin_crypto::Address,
 ) -> Transaction {
-    let mut data = b"RC\x01".to_vec();
+    let mut data = b"RC\x01\x00\x00\x00\x00\x00\x00".to_vec();
     data.extend_from_slice(validator_addr.as_bytes());
     Transaction {
         version: 1,
@@ -630,7 +650,7 @@ pub fn build_slash_report(
         return None;
     }
     let reporter_reward = stake / 2;
-    let mut data = b"SR\x01".to_vec();
+    let mut data = b"SR\x01\x00\x00\x00\x00\x00\x00".to_vec();
     data.extend_from_slice(&bincode::serialize(evidence).ok()?);
     Some(Transaction {
         version: 1,
@@ -731,7 +751,7 @@ pub fn build_block(
     let state_root = {
         let mut snap = chain.utxo_set.clone();
         snap.apply_transactions(&transactions);
-        let utxo_root = snap.state_root();
+        let utxo_root = snap.state_root().expect("UTXO serialization failed");
         let future_apply =
             PrivacyBlockApply::compute(&privacy_txs, &chain.commitment_tree, height);
         hash_data(
