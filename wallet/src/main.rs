@@ -81,6 +81,11 @@ enum Command {
         #[arg(long, default_value = "http://127.0.0.1:9944")]
         rpc: String,
     },
+    /// Add an HD seed to an existing wallet that was created without one.
+    ///
+    /// Preserves all privacy keys (payment address, view key, spend key) and
+    /// re-encrypts the keystore with a freshly-generated HD master seed.
+    UpgradeHd,
     /// Build and sign a transparent transfer, output signed hex for the JS SDK.
     ///
     /// Example (one UTXO input → one output, remainder to self):
@@ -124,6 +129,7 @@ fn run(cli: Cli) -> anyhow::Result<()> {
             cmd_send(&cli.keys, &rpc, &to, amount, fee, hardware_wallet.as_deref())
         }
         Command::Claim { rpc } => cmd_claim(&cli.keys, &rpc),
+        Command::UpgradeHd => cmd_upgrade_hd(&cli.keys),
         Command::SignTx { rpc, to, amount, chain_id, expiry } => {
             cmd_sign_tx(&cli.keys, &rpc, &to, amount, chain_id, expiry)
         }
@@ -156,6 +162,30 @@ fn cmd_generate(keys_path: &PathBuf) -> anyhow::Result<()> {
     println!("Transparent address #0:  {first_addr}");
     println!("Shielded send URI:       rupeecoin:{payment_hex}?vpk={vpk_hex}");
     println!("\nBackup the wallet file passphrase and the HD master seed (32 bytes) to restore funds.");
+    Ok(())
+}
+
+// ── upgrade-hd ────────────────────────────────────────────────────────────────
+
+fn cmd_upgrade_hd(keys_path: &PathBuf) -> anyhow::Result<()> {
+    let ks = keystore::load(keys_path)?;
+
+    if ks.hd_master_seed.is_some() {
+        anyhow::bail!("wallet already has an HD seed — nothing to upgrade");
+    }
+
+    let mut hd_seed = [0u8; 32];
+    rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut hd_seed);
+
+    // Re-save with the existing privacy bundle plus the new HD seed.
+    // Prompts for a new passphrase (the old keystore file is atomically replaced).
+    keystore::save(&ks.bundle, Some(&hd_seed), 0, keys_path)?;
+
+    let first_addr = hd_receive_address(&hd_seed, 0);
+    let payment_hex = hex::encode(ks.bundle.payment_address.0.as_bytes());
+    println!("HD seed added — privacy keys unchanged.");
+    println!("Privacy payment address: {payment_hex}");
+    println!("Transparent address #0:  {first_addr}");
     Ok(())
 }
 
