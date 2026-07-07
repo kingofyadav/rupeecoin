@@ -8,6 +8,9 @@ mobile-wallet/rust/target/
 
 # Node data
 rupeecoin-data/
+rupeecoin-data-*/
+rupeecoin-data.bak-*/
+rupeecoine-data/
 
 # Wallet keystores
 wallet.json
@@ -57,3 +60,7 @@ Thumbs.db
 # Memory snapshots
 .claude/
 android-cmdtools.zip
+
+# Test and notebook scratch
+.ipynb_checkpoints/
+*.ipynb
