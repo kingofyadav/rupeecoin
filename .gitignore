@@ -64,3 +64,6 @@ android-cmdtools.zip
 # Test and notebook scratch
 .ipynb_checkpoints/
 *.ipynb
+
+# Local devnet scratch (chain data, keys, logs) — created for manual testing
+local-testnet/
