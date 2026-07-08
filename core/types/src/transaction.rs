@@ -111,6 +111,31 @@ impl Transaction {
         }
     }
 
+    /// Extract the authorization `(validator_pubkey_bytes, signature_bytes)` from a
+    /// reward-claim transaction. Layout after the prefix:
+    /// `addr(32) || pk_len(4, LE) || pk || sig`.
+    pub fn reward_claim_auth(&self) -> Option<(&[u8], &[u8])> {
+        let data = self.coinbase_data.as_deref()?;
+        if !data.starts_with(REWARD_CLAIM_PREFIX) {
+            return None;
+        }
+        let mut off = REWARD_CLAIM_PREFIX.len() + 32;
+        if data.len() < off + 4 {
+            return None;
+        }
+        let pk_len = u32::from_le_bytes(data[off..off + 4].try_into().ok()?) as usize;
+        off += 4;
+        if data.len() < off + pk_len {
+            return None;
+        }
+        let pk = &data[off..off + pk_len];
+        let sig = &data[off + pk_len..];
+        if sig.is_empty() {
+            return None;
+        }
+        Some((pk, sig))
+    }
+
     /// True when this is an on-chain slashing-report transaction.
     pub fn is_slashing_report(&self) -> bool {
         self.inputs.is_empty()
