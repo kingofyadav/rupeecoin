@@ -9,6 +9,10 @@ proposer selection, HD key derivation, and EIP-1559-style fee markets — all ov
 libp2p gossipsub peer-to-peer network. The design targets UPI-scale throughput while
 remaining auditable, decentralised, and resistant to future quantum adversaries.
 
+> **New here?** Read [`HANDBOOK.md`](HANDBOOK.md) — a single guide with three tracks:
+> **using** RupeeCoin (wallets/faucet/explorer), **building** on it (CLI/RPC/SDKs), and
+> **why** it matters (the thesis, what's built, and an honest risk assessment).
+
 ---
 
 ## Table of Contents
@@ -235,7 +239,12 @@ rupeecoin/
 | 12 | RupeeCoin VM | **Complete** — RVM interpreter, RPC-20/721/1155, EVM transpiler |
 | 13 | Mainnet Preparation | **Complete** — genesis config, Tor/SOCKS5, hardware wallet, SDK v1.0 |
 | 14 | Mainnet Launch Hardening | **Complete** — all 7 security checklist items; 37 suites green |
-| 15 | Ecosystem Growth | **Next** — engineering carry-overs + validator onboarding + grants |
+| 15 | Ecosystem Growth | **Complete** — N-04 gossipsub allowlist, Trezor HID v1, CF_CONTRACT_CODE |
+| A–E | Internal Audit Hardening | **Complete** — 26 Critical + High/Medium findings fixed across audit passes A–E |
+| — | Reliability | **Complete** — node restarts cleanly from persisted chain (replay + registry); node `/rpc/utxos` emits `amount_rpc` for the wallet/SDKs |
+| Next | External Audit + Public Testnet (Zeta) | validator onboarding, bug bounty, ≥2 independent audits |
+
+> **Test status:** `cargo test --workspace` → **171 passed, 0 failed** (as of this revision).
 
 ---
 
@@ -243,8 +252,13 @@ rupeecoin/
 
 ### Prerequisites
 
-- Rust **1.73+** stable (`rustup update stable`)
-- A C compiler — required for the Dilithium3 seeded-keypair shim (`gcc` or `clang`)
+- Rust **1.75+** stable (`rustup update stable`)
+- A C compiler — required for the Dilithium3 seeded-keypair shim and RocksDB (`gcc` or
+  `clang`; Debian/Ubuntu: `sudo apt install build-essential clang libclang-dev`)
+
+> If a build fails with `could not exec the linker cc: Permission denied (os error 13)`,
+> the toolchain binaries have lost their execute bit — restore it with
+> `sudo chmod 755 /usr/bin/x86_64-linux-gnu-{gcc-13,g++-13,as,ld.bfd}` (adjust versions).
 
 ### Build
 
@@ -520,23 +534,39 @@ Full node snapshot — useful for dashboards and monitoring.
 ```json
 {
   "height": 42,
-  "tip_hash": "aabb…",
-  "validator_count": 3,
+  "slot": 42,
+  "epoch": 1,
+  "last_justified_epoch": 1,
+  "last_finalized_epoch": 0,
+  "active_validators": 3,
+  "total_stake": 30000000000000,
   "mempool_size": 7,
-  "base_fee": 1000,
-  "my_address": "aNV16Nqm…"
+  "pending_privacy_txs": 0,
+  "commitment_count": 17,
+  "base_fee": 1000
 }
 ```
 
 ### `GET /rpc/utxos?addr=<40-char-hex>`
 
-All unspent transparent UTXOs for a given address (hex-encoded 20-byte address).
+All unspent transparent UTXOs for a given address (accepts hex-encoded 20-byte
+address or Base58Check).
 
 ```json
 [
-  { "txid": "aabb…", "vout": 0, "amount_micro": 5000000000 }
+  {
+    "txid": "aabb…",
+    "vout": 0,
+    "amount_micro": 5000000000,
+    "amount_rpc": 50.0,
+    "amount_rpc_whole": 50,
+    "amount_rpc_frac": 0
+  }
 ]
 ```
+
+`amount_rpc` (float) is consumed by the wallet CLI and the Rust/Python SDKs;
+`amount_rpc_whole`/`amount_rpc_frac` give the exact integer split.
 
 ### `POST /rpc/tx`
 

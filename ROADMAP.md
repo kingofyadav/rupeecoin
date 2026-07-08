@@ -1,8 +1,13 @@
 # RupeeCoin — Development Roadmap
 
-> Last updated: 2026-06-16  
-> Current state: **Phases 0–14 complete.** All seven security-checklist items resolved. Mainnet-ready codebase.  
-> Next milestone: Phase 15 — Ecosystem bootstrapping (3 engineering carry-overs + public validator onboarding)
+> Last updated: 2026-07-09  
+> Current state: **Phases 0–15 complete**, plus internal audit hardening passes **A–E**
+> (26 Critical + numerous High/Medium findings fixed) and reliability fixes (clean node
+> restart from persisted chain; `/rpc/utxos` `amount_rpc`). `cargo test --workspace` →
+> **171 passed, 0 failed.**  
+> Next milestone: **external security audit + Public Testnet (Zeta)** validator onboarding.
+>
+> For a hands-on guide across users, developers, and investors, see [`HANDBOOK.md`](HANDBOOK.md).
 
 ---
 
