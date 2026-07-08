@@ -455,6 +455,9 @@ struct UtxoEntry {
     txid: String,
     vout: u32,
     amount_micro: u64,
+    /// Whole-coin value as a float (amount_micro / 100_000_000). Consumed by the
+    /// wallet CLI and SDK client.
+    amount_rpc: f64,
     /// Integer whole-coin part (amount_micro / 100_000_000).
     amount_rpc_whole: u64,
     /// Integer fractional part (amount_micro % 100_000_000), 8-digit precision.
@@ -488,6 +491,7 @@ async fn get_utxos(
             txid: hex::encode(op.txid.as_bytes()),
             vout: op.vout,
             amount_micro: out.amount,
+            amount_rpc: out.amount as f64 / 100_000_000.0,
             amount_rpc_whole: out.amount / 100_000_000,
             amount_rpc_frac:  out.amount % 100_000_000,
         })

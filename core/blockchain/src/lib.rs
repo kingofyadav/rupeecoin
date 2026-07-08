@@ -1,6 +1,6 @@
 pub mod genesis;
 
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use rupeecoin_consensus::{select_proposer, slot_to_epoch, verify_block_vrf, SLOTS_PER_EPOCH};
@@ -202,6 +202,64 @@ impl Chain {
         Ok(())
     }
 
+    /// Re-apply a block from the local, previously-validated store on startup.
+    ///
+    /// Unlike [`add_block`], this does **not** re-run consensus validation
+    /// (proposer / VRF) or registry economics.  Two reasons:
+    ///   1. The block was already fully validated when it was first accepted and
+    ///      persisted, so re-verifying it against the local store is redundant.
+    ///   2. Consensus verification needs the validator set as it was at each
+    ///      historical slot, but validator-set membership is established
+    ///      off-chain (node stake config + gossip announcements) and only the
+    ///      *tip* registry is persisted — the historical set is not
+    ///      reconstructable from block data alone.  The authoritative registry
+    ///      is restored separately from persisted metadata.
+    ///
+    /// The UTXO/privacy state is still rebuilt deterministically from the block,
+    /// and the committed `state_root` is recomputed and checked as an integrity
+    /// guard against store corruption.
+    pub fn replay_block(&mut self, block: Block) -> Result<(), ChainError> {
+        let mut delta = self.compute_delta(&block);
+        self.utxo_set.apply_block(&block)?;
+
+        let height = block.header.height;
+        let apply = PrivacyBlockApply::compute(&block.privacy_txs, &self.commitment_tree, height);
+
+        let utxo_root = self.utxo_set.state_root().expect("UTXO serialization failed");
+        let computed = hash_data(
+            &[utxo_root.as_bytes().as_slice(), apply.new_tree_root.as_bytes().as_slice()].concat(),
+        );
+        if block.header.state_root != computed {
+            self.undo_utxo_delta(&delta);
+            return Err(ChainError::InvalidStateRoot(block.header.state_root, computed));
+        }
+
+        for cm in &apply.new_commitments {
+            self.commitment_tree.append(*cm);
+        }
+        let mut inserted_nullifiers = Vec::new();
+        for (nullifier, _) in &apply.new_nullifiers {
+            self.spent_nullifiers.insert(*nullifier);
+            inserted_nullifiers.push(*nullifier);
+        }
+        delta.inserted_nullifiers = inserted_nullifiers;
+        self.recent_roots.push(apply.new_tree_root);
+        if self.recent_roots.len() > ANCHOR_DEPTH + 1 {
+            self.recent_roots.remove(0);
+        }
+
+        self.block_deltas.push_back(delta);
+        self.blocks.push(block);
+        if self.blocks.len() > BLOCK_KEEP_LAST {
+            let excess = self.blocks.len() - BLOCK_KEEP_LAST;
+            for _ in 0..excess {
+                self.block_deltas.pop_front();
+            }
+            self.blocks.drain(..excess);
+        }
+        Ok(())
+    }
+
     /// Compute the UTXO delta for `block` without applying it.
     fn compute_delta(&self, block: &Block) -> BlockDelta {
         let mut added = Vec::new();
@@ -381,13 +439,37 @@ impl Chain {
             return Err(ChainError::ExcessiveCoinbaseReward(coinbase_out, max_reward));
         }
 
+        // Accumulate claims/reports across the block so a proposer cannot mint
+        // more than the available rewards by including the same claim twice, nor
+        // slash the same validator twice within one block.
+        let mut claimed_per_validator: HashMap<Hash, u64> = HashMap::new();
+        let mut slashed_in_block: HashSet<Hash> = HashSet::new();
         for tx in &block.transactions[1..] {
             if tx.is_coinbase() {
                 return Err(ChainError::UnexpectedCoinbase);
             } else if tx.is_reward_claim() {
                 self.validate_reward_claim(tx, registry)?;
+                let addr = tx.reward_claim_addr().expect("validated reward-claim addr");
+                let claimed: u64 = tx.outputs.iter().map(|o| o.amount).sum();
+                let entry = claimed_per_validator.entry(addr).or_insert(0);
+                *entry = entry.saturating_add(claimed);
+                let available = registry.get(&addr).map(|v| v.claimable_rewards).unwrap_or(0);
+                if *entry > available {
+                    return Err(ChainError::InvalidRewardClaim(format!(
+                        "cumulative claim {} exceeds available {} for {addr}",
+                        *entry, available
+                    )));
+                }
             } else if tx.is_slashing_report() {
                 self.validate_slashing_report(tx, registry)?;
+                let slashed = slashed_validator_addr(
+                    &tx.slashing_evidence().expect("validated slashing evidence"),
+                );
+                if !slashed_in_block.insert(slashed) {
+                    return Err(ChainError::InvalidSlashingReport(format!(
+                        "duplicate slashing report for validator {slashed} in same block"
+                    )));
+                }
             } else {
                 self.utxo_set.validate_transfer(tx, block.header.height)?;
             }
@@ -502,6 +584,29 @@ impl Chain {
         let addr = tx.reward_claim_addr().ok_or_else(|| {
             ChainError::InvalidRewardClaim("missing validator address in claim".into())
         })?;
+
+        // ── Authenticate the claim ────────────────────────────────────────────
+        // The claim must carry the validator's Dilithium3 public key and a
+        // signature over (domain ‖ validator_addr ‖ outputs). Without this,
+        // any block producer could redirect another validator's rewards to
+        // an address they control (audit H-10).
+        let (pk_bytes, sig_bytes) = tx.reward_claim_auth().ok_or_else(|| {
+            ChainError::InvalidRewardClaim("missing claim authorization".into())
+        })?;
+        let pk = PublicKey::from_bytes(pk_bytes)
+            .map_err(|_| ChainError::InvalidRewardClaim("invalid claim public key".into()))?;
+        if pk.to_hash() != addr {
+            return Err(ChainError::InvalidRewardClaim(
+                "claim public key does not match validator address".into(),
+            ));
+        }
+        let sig = Signature::from_bytes(sig_bytes)
+            .map_err(|_| ChainError::InvalidRewardClaim("invalid claim signature".into()))?;
+        let msg = reward_claim_sig_message(&addr, &tx.outputs);
+        pk.verify(&msg, &sig).map_err(|_| {
+            ChainError::InvalidRewardClaim("claim signature verification failed".into())
+        })?;
+
         let v = registry
             .get(&addr)
             .ok_or_else(|| ChainError::InvalidRewardClaim(format!("validator {addr} not found")))?;
@@ -619,20 +724,41 @@ pub fn build_coinbase(
 
 /// Build a reward-claim transaction.  The proposer claims all their accrued
 /// rewards and receives them as a UTXO at `output_addr`.
+/// The message a validator signs to authorise a reward claim. Binds the claim
+/// to the validator address and the exact payout outputs so it cannot be
+/// replayed with a different recipient.
+fn reward_claim_sig_message(validator_addr: &Hash, outputs: &[TxOutput]) -> Vec<u8> {
+    let mut m = b"rupeecoin-reward-claim-v1".to_vec();
+    m.extend_from_slice(validator_addr.as_bytes());
+    for o in outputs {
+        m.extend_from_slice(o.recipient.as_bytes());
+        m.extend_from_slice(&o.amount.to_le_bytes());
+    }
+    m
+}
+
 pub fn build_reward_claim(
     validator_addr: Hash,
     amount: u64,
     output_addr: rupeecoin_crypto::Address,
+    keypair: &KeyPair,
 ) -> Transaction {
+    let outputs = vec![TxOutput { amount, recipient: output_addr }];
+    let sig = keypair.sign(&reward_claim_sig_message(&validator_addr, &outputs));
+    let pk = keypair.public_key.as_bytes();
+
     let mut data = b"RC\x01\x00\x00\x00\x00\x00\x00".to_vec();
     data.extend_from_slice(validator_addr.as_bytes());
+    data.extend_from_slice(&(pk.len() as u32).to_le_bytes());
+    data.extend_from_slice(pk);
+    data.extend_from_slice(sig.as_bytes());
     Transaction {
         version: 1,
         chain_id: MAINNET_CHAIN_ID,
         nonce: 0,
         expiry: 0,
         inputs: vec![],
-        outputs: vec![TxOutput { amount, recipient: output_addr }],
+        outputs,
         coinbase_data: Some(data),
     }
 }

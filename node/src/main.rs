@@ -227,7 +227,6 @@ fn load_or_create_chain(
     checkpoint_mgr: &CheckpointManager,
     genesis_timestamp: u64,
 ) -> Result<Chain> {
-    let mut empty = ValidatorRegistry::new();
 
     match store.get_tip().context("reading chain tip from store")? {
         None => {
@@ -299,8 +298,12 @@ fn load_or_create_chain(
                     }
                     chain.blocks.push(block);
                 } else {
+                    // Trust locally-persisted, previously-validated blocks: rebuild
+                    // UTXO/privacy state without re-running consensus validation.
+                    // (Historical validator set for VRF/proposer checks is not
+                    // reconstructable; the registry is restored from metadata.)
                     chain
-                        .add_block(block, &mut empty)
+                        .replay_block(block)
                         .with_context(|| format!("replaying block {h}"))?;
                 }
             }
@@ -685,14 +688,21 @@ async fn main() -> Result<()> {
     }
 
     if is_validator {
-        registry
-            .register(kp.public_key.clone(), cfg.stake_micro_rpc, chain.height())
-            .expect("self-registration should not fail");
-        info!(
-            "Joined validator set — stake {} micro-RPC — active set: {}",
-            cfg.stake_micro_rpc,
-            registry.active_count()
-        );
+        // On a fresh start this registers the validator; on restart the validator
+        // is already present in the registry restored from persisted metadata, in
+        // which case AlreadyRegistered is expected and harmless.
+        match registry.register(kp.public_key.clone(), cfg.stake_micro_rpc, chain.height()) {
+            Ok(()) => info!(
+                "Joined validator set — stake {} micro-RPC — active set: {}",
+                cfg.stake_micro_rpc,
+                registry.active_count()
+            ),
+            Err(rupeecoin_staking::StakingError::AlreadyRegistered) => info!(
+                "Validator already present in restored registry — active set: {}",
+                registry.active_count()
+            ),
+            Err(e) => panic!("validator self-registration failed: {e}"),
+        }
         let sig_data = ValidatorAnnouncement::sig_data(&kp.public_key, cfg.stake_micro_rpc);
         let ann = ValidatorAnnouncement {
             pubkey: kp.public_key.clone(),
@@ -1017,6 +1027,7 @@ async fn main() -> Result<()> {
                                 my_addr,
                                 v.claimable_rewards,
                                 kp.public_key.to_address(),
+                                &kp,
                             );
                             extra_txs.insert(0, claim);
                         }
