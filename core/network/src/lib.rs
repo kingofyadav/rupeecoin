@@ -490,6 +490,7 @@ async fn on_event(
         SwarmEvent::Behaviour(RupeeCoinBehaviourEvent::DandelionStem(
             request_response::Event::Message {
                 peer: sender,
+                connection_id: _,
                 message:
                     request_response::Message::Request {
                         request_id: _,
@@ -564,6 +565,7 @@ async fn on_event(
         SwarmEvent::Behaviour(RupeeCoinBehaviourEvent::BlockSync(
             request_response::Event::Message {
                 peer,
+                connection_id: _,
                 message:
                     request_response::Message::Request {
                         request_id,
@@ -663,7 +665,7 @@ fn on_cmd(
             if let Ok(data) = bincode::serialize(&*block) {
                 match swarm.behaviour_mut().gossipsub.publish(block_topic.clone(), data) {
                     Ok(_) => {}
-                    Err(gossipsub::PublishError::InsufficientPeers) => trace!("gossipsub publish block: no peers yet"),
+                    Err(gossipsub::PublishError::NoPeersSubscribedToTopic) => trace!("gossipsub publish block: no peers yet"),
                     Err(e) => warn!("gossipsub publish block: {e}"),
                 }
             }
@@ -687,7 +689,7 @@ fn on_cmd(
                     // No connected peers — fall back to immediate gossipsub broadcast.
                     match swarm.behaviour_mut().gossipsub.publish(tx_topic.clone(), data) {
                         Ok(_) => {}
-                        Err(gossipsub::PublishError::InsufficientPeers) => trace!("gossipsub publish tx: no peers yet"),
+                        Err(gossipsub::PublishError::NoPeersSubscribedToTopic) => trace!("gossipsub publish tx: no peers yet"),
                         Err(e) => warn!("gossipsub publish tx: {e}"),
                     }
                 }
@@ -697,7 +699,7 @@ fn on_cmd(
             if let Ok(data) = bincode::serialize(&*ann) {
                 match swarm.behaviour_mut().gossipsub.publish(validator_topic.clone(), data) {
                     Ok(_) => {}
-                    Err(gossipsub::PublishError::InsufficientPeers) => trace!("gossipsub publish validator announcement: no peers yet"),
+                    Err(gossipsub::PublishError::NoPeersSubscribedToTopic) => trace!("gossipsub publish validator announcement: no peers yet"),
                     Err(e) => warn!("gossipsub publish validator announcement: {e}"),
                 }
             }
@@ -706,7 +708,7 @@ fn on_cmd(
             if let Ok(data) = bincode::serialize(&*att) {
                 match swarm.behaviour_mut().gossipsub.publish(attestation_topic.clone(), data) {
                     Ok(_) => {}
-                    Err(gossipsub::PublishError::InsufficientPeers) => trace!("gossipsub publish attestation: no peers yet"),
+                    Err(gossipsub::PublishError::NoPeersSubscribedToTopic) => trace!("gossipsub publish attestation: no peers yet"),
                     Err(e) => warn!("gossipsub publish attestation: {e}"),
                 }
             }
