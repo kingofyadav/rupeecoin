@@ -37,7 +37,7 @@ hex                 = "0.4"
 rocksdb             = { version = "0.22", default-features = false }
 tokio               = { version = "1", features = ["full"] }
 futures             = "0.3"
-libp2p              = { version = "0.54", features = [
+libp2p              = { version = "0.56", features = [
     "tcp", "noise", "yamux", "gossipsub",
     "identify", "mdns", "ping", "request-response", "tokio", "macros",
 ] }
