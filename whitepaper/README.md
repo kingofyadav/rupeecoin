@@ -63,8 +63,8 @@ No closed research. No private roadmaps.
 | Property | Bitcoin | Ethereum | RupeeCoin |
 |---|---|---|---|
 | Quantum Resistant | ❌ | ❌ | ✅ |
-| Privacy By Default | ❌ | ❌ | ✅ (Phase 4 partial; full in Phase 5B) |
-| Smart Contracts | ❌ | ✅ | Planned (Phase 12) |
+| Privacy By Default | ❌ | ❌ | ✅ (shielded pool + zk-STARK spend proofs) |
+| Smart Contracts | ❌ | ✅ | ✅ (RVM + RPC-20/721/1155 + EVM transpiler) |
 | Energy Efficient | ❌ | ✅ | ✅ |
 | Social Key Recovery | ❌ | ❌ | Planned |
 | Programmable Currency Design | ❌ | ⚠️ | ✅ |
@@ -168,8 +168,14 @@ rupeecoin/
 
 ---
 
-> **Current state (2026-06-15):** Phases 0–9.6 complete (81 tests, 4 benchmark groups).  
-> Next: Phase 10 — Public Testnet (Zeta).
+> **Current state:** The settlement chain, PoS consensus, privacy layer (incl. zk-STARK
+> spend proofs), economics, the RupeeCoin VM, and mainnet-preparation hardening are all
+> implemented and covered by **171 passing tests**. Internal audit passes A–E are complete.
+> **Next frontier:** external security audit + Public Testnet (Zeta) validator onboarding.
+>
+> This roadmap uses the whitepaper's aspirational phase numbering. For the authoritative,
+> up-to-date engineering status and a hands-on guide, see [`../README.md`](../README.md)
+> and [`../HANDBOOK.md`](../HANDBOOK.md).
 
 ### Phase 0 — Foundation
 **Status:** `Complete` · **Goal:** Build the intellectual foundation before writing production code.
@@ -250,7 +256,7 @@ rupeecoin/
 ---
 
 ### Phase 3 — Validator Testnet
-**Status:** `Partial` · **Goal:** Stress test decentralization and consensus.
+**Status:** `Complete (core)` · **Goal:** Stress test decentralization and consensus.
 
 - [x] Proof of Contribution scoring system (uptime 30%, attestation 40%, proposal 20%, propagation 10%)
 - [x] Slashing conditions — equivocation (double proposal)
@@ -274,7 +280,9 @@ rupeecoin/
 ---
 
 ### Phase 4 — Privacy Layer
-**Status:** `Partial` · **Goal:** Integrate zero-knowledge privacy.
+**Status:** `Complete` · **Goal:** Integrate zero-knowledge privacy.
+> Real Winterfell zk-STARK spend proofs, batched verification, and the Poseidon
+> commitment tree are implemented (engineering Phases 8 & 11).
 
 - [x] zk-STARK library selected (Winterfell) and integrated (placeholder)
 - [x] Private UTXO commitment scheme (BLAKE3 note commitments)
@@ -299,16 +307,16 @@ rupeecoin/
 ---
 
 ### Phase 5 — RupeeCoin VM
-**Status:** `Not started` · **Goal:** Make the protocol programmable.
+**Status:** `Complete` · **Goal:** Make the protocol programmable.
 
-- [ ] RVM specification finalized
-- [ ] VM runtime implementation
-- [ ] Smart contract compiler
-- [ ] Contract deployment flow
-- [ ] Token standards (RPC-20, RPC-721, RPC-1155)
-- [ ] Developer tooling alpha
+- [x] RVM specification finalized
+- [x] VM runtime implementation (64-bit stack VM, gas metering)
+- [x] Contract deployment flow (persisted via `CF_CONTRACT_CODE`)
+- [x] Token standards (RPC-20, RPC-721, RPC-1155)
+- [x] EVM→RVM bytecode transpiler (`evm2rvm`)
+- [ ] High-level contract language + developer tooling (ongoing)
 
-**Milestone:** First smart contract deployed on testnet.
+**Milestone:** First smart contract deployed on testnet — reached (engineering Phase 12).
 
 ---
 

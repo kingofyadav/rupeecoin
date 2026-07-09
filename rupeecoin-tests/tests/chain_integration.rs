@@ -1,6 +1,8 @@
 //! Integration tests: full chain construction across multiple crates.
 
-use rupeecoin_blockchain::{build_block, build_coinbase, genesis_block, Chain, ANCHOR_DEPTH};
+use rupeecoin_blockchain::{
+    build_block, build_coinbase, build_reward_claim, genesis_block, Chain, ANCHOR_DEPTH,
+};
 use rupeecoin_consensus::{CheckpointManager, CHECKPOINT_INTERVAL};
 use rupeecoin_crypto::{Hash, KeyPair};
 use rupeecoin_economics::{block_reward, next_base_fee, GAS_TARGET};
@@ -249,4 +251,150 @@ fn sdk_coins_to_micro_roundtrip() {
     use rupeecoin_sdk::tx::coins_to_micro;
     assert_eq!(coins_to_micro(1.0), MICRO_RPC_PER_COIN);
     assert_eq!(coins_to_micro(0.0), 0);
+}
+
+// ── Reward-claim authentication (audit H-10) ────────────────────────────────────
+
+#[test]
+fn signed_reward_claim_to_own_address_is_accepted() {
+    let kp = make_keypair();
+    let addr = kp.public_key.to_hash();
+    let mut registry = make_registry_with_validator(&kp, 10_000 * MICRO_RPC_PER_COIN);
+    registry.credit_rewards(&addr, 5 * MICRO_RPC_PER_COIN);
+    let mut chain = Chain::new(genesis_block());
+
+    let claim = build_reward_claim(addr, 5 * MICRO_RPC_PER_COIN, kp.public_key.to_address(), &kp);
+    let block = build_block(&chain, &kp, &registry, vec![], vec![claim], vec![]);
+    chain
+        .add_block(block, &mut registry)
+        .expect("a properly signed reward claim to the validator's own address must be valid");
+}
+
+#[test]
+fn reward_claim_redirected_to_attacker_is_rejected() {
+    let kp = make_keypair();
+    let attacker = make_keypair();
+    let addr = kp.public_key.to_hash();
+    let mut registry = make_registry_with_validator(&kp, 10_000 * MICRO_RPC_PER_COIN);
+    registry.credit_rewards(&addr, 5 * MICRO_RPC_PER_COIN);
+    let mut chain = Chain::new(genesis_block());
+
+    // Take a legitimately signed claim and tamper the payout recipient. The
+    // signature covers the outputs, so verification must now fail.
+    let mut forged =
+        build_reward_claim(addr, 5 * MICRO_RPC_PER_COIN, kp.public_key.to_address(), &kp);
+    forged.outputs[0].recipient = attacker.public_key.to_address();
+    let block = build_block(&chain, &kp, &registry, vec![], vec![forged], vec![]);
+    assert!(
+        chain.add_block(block, &mut registry).is_err(),
+        "a reward claim whose payout was redirected must be rejected"
+    );
+}
+
+#[test]
+fn reward_claim_for_foreign_validator_is_rejected() {
+    let victim = make_keypair();
+    let attacker = make_keypair();
+    let victim_addr = victim.public_key.to_hash();
+    let mut registry = make_registry_with_validator(&victim, 10_000 * MICRO_RPC_PER_COIN);
+    registry.credit_rewards(&victim_addr, 5 * MICRO_RPC_PER_COIN);
+    let mut chain = Chain::new(genesis_block());
+
+    // Attacker claims the victim's accrued rewards, signing with their own key.
+    // pk.to_hash() != victim_addr, so the claim is unauthenticated → rejected.
+    let forged = build_reward_claim(
+        victim_addr,
+        5 * MICRO_RPC_PER_COIN,
+        attacker.public_key.to_address(),
+        &attacker,
+    );
+    let block = build_block(&chain, &victim, &registry, vec![], vec![forged], vec![]);
+    assert!(
+        chain.add_block(block, &mut registry).is_err(),
+        "a reward claim for a validator the signer does not control must be rejected"
+    );
+}
+
+#[test]
+fn double_reward_claim_in_same_block_is_rejected() {
+    let kp = make_keypair();
+    let addr = kp.public_key.to_hash();
+    let mut registry = make_registry_with_validator(&kp, 10_000 * MICRO_RPC_PER_COIN);
+    registry.credit_rewards(&addr, 5 * MICRO_RPC_PER_COIN);
+    let mut chain = Chain::new(genesis_block());
+
+    // Two valid signed claims for the full balance; cumulative payout (10) would
+    // exceed the 5 available, so the block must be rejected.
+    let c1 = build_reward_claim(addr, 5 * MICRO_RPC_PER_COIN, kp.public_key.to_address(), &kp);
+    let c2 = build_reward_claim(addr, 5 * MICRO_RPC_PER_COIN, kp.public_key.to_address(), &kp);
+    let block = build_block(&chain, &kp, &registry, vec![], vec![c1, c2], vec![]);
+    assert!(
+        chain.add_block(block, &mut registry).is_err(),
+        "two full-balance reward claims in one block must be rejected"
+    );
+}
+
+// ── Restart / replay ────────────────────────────────────────────────────────────
+
+#[test]
+fn replay_reconstructs_state_without_registry() {
+    // Regression: on restart a node must rebuild chain state from its persisted,
+    // already-validated blocks WITHOUT the validator registry (the historical
+    // validator set is not reconstructable from block data). Re-running full
+    // validation against an empty registry previously failed VRF verification and
+    // made the node unable to restart at all.
+    let kp = make_keypair();
+    let mut registry = make_registry_with_validator(&kp, 10_000 * MICRO_RPC_PER_COIN);
+    let mut chain = Chain::new(genesis_block());
+
+    // Produce blocks the normal way; keep them to stand in for the store.
+    let mut stored = Vec::new();
+    for _ in 0..6 {
+        let block = build_block(&chain, &kp, &registry, vec![], vec![], vec![]);
+        stored.push(block.clone());
+        chain.add_block(block, &mut registry).expect("production block should be valid");
+    }
+    let expected_height = chain.height();
+    let expected_utxo_root = chain.utxo_set.state_root().expect("UTXO serialization failed");
+    let expected_privacy_root = chain.commitment_tree.root();
+
+    // Restart: fresh chain, no registry available, replay the stored blocks.
+    let mut replayed = Chain::new(genesis_block());
+    for block in stored {
+        replayed
+            .replay_block(block)
+            .expect("replay of a persisted, previously-validated block must succeed");
+    }
+
+    assert_eq!(replayed.height(), expected_height, "replayed height must match production");
+    assert_eq!(
+        replayed.utxo_set.state_root().expect("UTXO serialization failed"),
+        expected_utxo_root,
+        "replayed UTXO state must match production",
+    );
+    assert_eq!(
+        replayed.commitment_tree.root(),
+        expected_privacy_root,
+        "replayed privacy state must match production",
+    );
+}
+
+#[test]
+fn replay_detects_corrupted_state_root() {
+    // The integrity guard: if a persisted block's committed state_root does not
+    // match the recomputed state, replay must reject it rather than load bad state.
+    let kp = make_keypair();
+    let mut registry = make_registry_with_validator(&kp, 10_000 * MICRO_RPC_PER_COIN);
+    let mut chain = Chain::new(genesis_block());
+
+    let mut block = build_block(&chain, &kp, &registry, vec![], vec![], vec![]);
+    chain.add_block(block.clone(), &mut registry).unwrap();
+
+    // Tamper with the committed state root, then replay onto a fresh chain.
+    block.header.state_root = Hash::from_bytes([0xAB; 32]);
+    let mut replayed = Chain::new(genesis_block());
+    assert!(
+        replayed.replay_block(block).is_err(),
+        "replay must reject a block whose state_root does not match recomputed state",
+    );
 }

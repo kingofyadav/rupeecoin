@@ -66,6 +66,12 @@ impl Signature {
     pub fn as_bytes(&self) -> &[u8] {
         &self.0
     }
+
+    /// Reconstruct a signature from raw bytes, validating the Dilithium3 encoding.
+    pub fn from_bytes(b: &[u8]) -> Result<Self, CryptoError> {
+        dilithium3::DetachedSignature::from_bytes(b).map_err(|_| CryptoError::InvalidSignature)?;
+        Ok(Signature(b.to_vec()))
+    }
 }
 
 /// Ephemeral keypair — secret key is not serializable by design.
@@ -119,6 +125,12 @@ impl KeyPair {
 impl PublicKey {
     pub fn as_bytes(&self) -> &[u8] {
         &self.0
+    }
+
+    /// Reconstruct a public key from raw bytes, validating the Dilithium3 encoding.
+    pub fn from_bytes(b: &[u8]) -> Result<Self, CryptoError> {
+        dilithium3::PublicKey::from_bytes(b).map_err(|_| CryptoError::InvalidPublicKey)?;
+        Ok(PublicKey(b.to_vec()))
     }
 
     /// Derive the 20-byte UTXO address: first 20 bytes of BLAKE3(public_key_bytes).

@@ -1,7 +1,8 @@
 ================================================================================
   RUPEECOIN — DEVELOPER & USER GUIDE
   Complete reference for CLI tools, RPC API, SDK, and protocol constants
-  Build: Phases 0–14 complete  |  Test suite: 37 suites, 0 failures  |  4 benchmark groups
+  Build: Phases 0–15 + audit passes A–E complete  |  171 tests, 0 failures  |  4 benchmark groups
+  New: see HANDBOOK.md for a three-track guide (users / developers / investors).
 ================================================================================
 
 
@@ -25,18 +26,19 @@ Binaries produced
 Run all tests
   cargo test --workspace
 
-  Expected output (all should be "ok"):
-    rupeecoin-crypto      11 tests   (HD derivation, hash, address)
+  Expected output (all should be "ok") — representative counts:
+    rupeecoin-crypto      12 tests   (HD derivation, hash, address)
     rupeecoin-economics   16 tests   (supply schedule, fee market — incl. proptest)
     rupeecoin-mempool      6 tests   (ordering, eviction — incl. proptest)
-    rupeecoin-network     15 tests   (Dandelion++ routing, peer selection, rate limiting)
-    rupeecoin-utxo         6 tests   (coinbase maturity, UTXO validation — incl. proptest)
-    rupeecoin-privacy      7 tests   (notes, nullifiers, Merkle, shielded tx)
-    rupeecoin-rvm         12 tests   (opcodes, gas, token standards, EVM transpiler)
+    rupeecoin-network     19 tests   (Dandelion++ routing, peer selection, allowlist, rate limiting)
+    rupeecoin-utxo         2 tests   (coinbase maturity, UTXO validation)
+    rupeecoin-privacy     18 tests   (notes, nullifiers, Merkle, shielded tx)
+    rupeecoin-rvm         31 tests   (opcodes, gas, token standards, EVM transpiler)
     rupeecoin-sdk         11 tests   (wallet, tx helpers, RPC client)
-    rupeecoin-tests       17 tests   (cross-crate integration)
+    rupeecoin-tests       23 tests   (cross-crate integration, incl. node restart/replay)
+    evm2rvm / node / types / wallet / zkproof …  (additional binaries & crates)
     ─────────────────────────────────
-    Total: 37 compiled test suites, 0 failures
+    Total: 171 tests (unit + integration + doc), 0 failures
     Run  cargo test --workspace  for live counts.
 
 
@@ -445,38 +447,80 @@ Global flag (applies to every subcommand):
 ──────────────────────────────────────────────────────────────────────────────
   GET /rpc/status
 ──────────────────────────────────────────────────────────────────────────────
-  Full node snapshot: height, tip hash, validator count, mempool size,
-  base fee, and the node's own transparent validator address.
+  Full node snapshot: height/slot/epoch, justified & finalized epochs, active
+  validator count, total stake, mempool size, pending privacy txs, shielded
+  commitment count, and the current base fee.
 
   Response:
     {
       "height": 42,
-      "tip_hash": "<64-char hex>",
-      "validator_count": 3,
+      "slot": 42,
+      "epoch": 1,
+      "last_justified_epoch": 1,
+      "last_finalized_epoch": 0,
+      "active_validators": 3,
+      "total_stake": 30000000000000,
       "mempool_size": 7,
-      "base_fee": 1000,
-      "my_address": "aNV16Nqm..."
+      "pending_privacy_txs": 0,
+      "commitment_count": 17,
+      "base_fee": 1000
     }
 
   curl example:
     curl http://127.0.0.1:9944/rpc/status
 
 ──────────────────────────────────────────────────────────────────────────────
-  GET /rpc/utxos?addr=<40-char-hex>
+  GET /rpc/utxos?addr=<40-char-hex | Base58Check>
 ──────────────────────────────────────────────────────────────────────────────
   All unspent transparent UTXOs for an address.
-  The address must be a 40-character hex string (20 raw bytes).
+  The address may be a 40-character hex string (20 raw bytes) OR a Base58Check
+  address — both are accepted.
 
   Response (array):
     [
-      { "txid": "<64-char hex>", "vout": 0, "amount_micro": 5000000000 },
+      {
+        "txid": "<64-char hex>",
+        "vout": 0,
+        "amount_micro": 5000000000,
+        "amount_rpc": 50.0,
+        "amount_rpc_whole": 50,
+        "amount_rpc_frac": 0
+      },
       ...
     ]
 
-  Error (400): { "error": "addr must be 40 hex chars" }
+    amount_rpc          float value in whole RPC (consumed by the wallet CLI + Rust/Python SDKs)
+    amount_rpc_whole    integer whole-coin part
+    amount_rpc_frac     integer fractional part (8-digit precision)
+
+  Error (400): { "error": "invalid address: ..." }
 
   curl example:
     curl "http://127.0.0.1:9944/rpc/utxos?addr=<40-char-hex>"
+
+──────────────────────────────────────────────────────────────────────────────
+  GET /rpc/nonce?addr=<40-char-hex | Base58Check>
+──────────────────────────────────────────────────────────────────────────────
+  Next expected nonce for a transparent address (number of txs already sent).
+  A fresh address returns 0.  Needed to build a valid transparent transaction.
+
+  Response:  { "nonce": 3 }
+
+──────────────────────────────────────────────────────────────────────────────
+  GET /rpc/validator_info?addr=<64-char-hex registry address>
+──────────────────────────────────────────────────────────────────────────────
+  Validator status and accrued rewards, keyed by the registry pubkey hash.
+
+  Response:
+    {
+      "claimable_rewards": 0,
+      "stake": 1000000000000,
+      "uptime_score": 1.0,
+      "proposal_score": 1.0,
+      "total_score": 1.0,
+      "is_active": true,
+      "status": "Active"
+    }
 
 ──────────────────────────────────────────────────────────────────────────────
   POST /rpc/tx
@@ -706,9 +750,9 @@ Global flag (applies to every subcommand):
                      gas metering (base_gas per opcode), RPC-20 / RPC-721 / RPC-1155
                      token bytecode standards, EVM→RVM transpiler (evm2rvm)
 
-  core/storage       ChainStore (RocksDB) — 9 column families:
+  core/storage       ChainStore (RocksDB) — 10 column families:
                      blocks, heights, utxos, meta, nullifiers, note_cmts,
-                     shielded_outs, checkpoints, contract_storage
+                     shielded_outs, checkpoints, contract_storage, contract_code
 
   core/network       libp2p swarm — gossipsub, request-response sync,
                      Dandelion++ (dandelion.rs), peer management
@@ -717,7 +761,8 @@ Global flag (applies to every subcommand):
                      Flags: --stake, --rpc-port, --validator-seed, --checkpoint, …
 
   wallet             Binary: HD wallet + shielded transaction CLI
-                     Commands: generate, address, receive, scan, send, claim, sign-tx
+                     Commands: generate, address, receive, scan, send, claim,
+                               sign-tx (transparent), upgrade-hd
 
   explorer           Binary: block explorer (axum REST + dark-mode SPA)
                      Routes: /api/height, /api/recent, /api/block/:h, /api/tx/:id, …
@@ -737,7 +782,7 @@ Global flag (applies to every subcommand):
 
   rupeecoin-sdk      Rust SDK: Wallet (HD), RpcClient, build_transfer, denomination helpers
 
-  rupeecoin-tests    Integration test crate: 17 cross-crate tests
+  rupeecoin-tests    Integration test crate: 23 cross-crate tests (incl. node restart/replay)
                      Criterion benchmarks: block_throughput, state_root, privacy_proof, chain_sync
 
 
@@ -778,6 +823,26 @@ Global flag (applies to every subcommand):
     ./target/release/rupeecoin-wallet --keys test.json send \
       --to <recipient_payment_address_hex> \
       --amount 1.5
+
+  ── Getting spendable coins on a local devnet ──────────────────────────────
+  Start the node with a fixed --validator-seed so its coinbase address is known
+  and spendable.  Coinbase rewards (47.5 RPC/block) mature after COINBASE_MATURITY
+  = 100 blocks.  Once height > 100, spend a known-mature early-block coinbase to
+  any address with the fund_direct example (it fetches the correct nonce):
+
+    VSEED=$(printf 'cc%.0s' {1..32})     # 64 hex chars = 32-byte seed
+    ./target/release/rupeecoin-node --data-dir ./devnet --validator-seed "$VSEED" \
+      --stake 10000 --block-interval 1 --rpc-port 9944 &
+    # find an early block's coinbase txid via the explorer, then:
+    cargo run --release --example fund_direct -p rupeecoin-faucet -- \
+      --txid <early_coinbase_txid> --vout 0 --to <dest_b58> --amount 45 \
+      --seed "$VSEED" --node http://127.0.0.1:9944 --chain-id 1
+
+  Note: the fund_faucet example hardcodes nonce:0 (only the validator's FIRST
+  spend) and does not filter immature coinbases — prefer fund_direct for repeats.
+  Transparent transfers from your own wallet use `sign-tx` (Part 3) + POST /rpc/tx.
+
+  See HANDBOOK.md (Part B.3) for a fuller, verified local-devnet walkthrough.
 
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -942,20 +1007,36 @@ Global flag (applies to every subcommand):
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 ──────────────────────────────────────────────────────────────────────────────
-  Error: serialization: io error: unexpected end of file
+  Restarting a node on an existing --data-dir
 ──────────────────────────────────────────────────────────────────────────────
-  Cause:  The node was killed mid-write (Ctrl+C, kill, crash, power loss).
-          RocksDB has a partially written block record.  The node cannot
-          replay the chain and exits immediately.
+  Normal restarts are supported: the node replays its persisted, already-validated
+  blocks (without re-running consensus) and restores the validator registry, then
+  continues.  You can stop (Ctrl+C) and start again on the same --data-dir.
 
-  Fix:    Wipe the data directory and start fresh.
+  Error: serialization: io error: unexpected end of file
+  Cause:  A hard kill / crash / power loss left RocksDB with a partially written
+          record (genuine corruption — distinct from a clean restart).
+  Fix:    Sync from a peer if possible; otherwise wipe and re-sync:
             rm -rf ~/dev/projects/rupeecoin/rupeecoin-data
-            rpc-start 10000
-
-  Note:   All on-chain state is lost.  On a real network, sync from a peer
-          instead of wiping:
             rpc-start 10000 --peer /ip4/<peer-ip>/tcp/30333/p2p/<peer-id>
-          (peer sync not yet automatic — full sync is a Phase 10 item).
+
+──────────────────────────────────────────────────────────────────────────────
+  Build error: could not exec the linker `cc`: Permission denied (os error 13)
+──────────────────────────────────────────────────────────────────────────────
+  Cause:  The C toolchain binaries lost their world-execute bit, so cargo cannot
+          run the linker.  (cc/gcc exist but are not executable by your user.)
+
+  Fix:    Restore standard 755 permissions on the toolchain binaries:
+            sudo chmod 755 /usr/bin/x86_64-linux-gnu-{gcc-13,g++-13,as,ld.bfd}
+          (adjust the -13 version to match your installed gcc.)
+
+──────────────────────────────────────────────────────────────────────────────
+  Automating the wallet passphrase (rpassword ignores piped stdin)
+──────────────────────────────────────────────────────────────────────────────
+  The wallet reads the keystore passphrase from the controlling terminal via
+  rpassword; it does NOT read a piped stdin.  For scripts/CI, run the wallet under
+  a pseudo-terminal (PTY) and type the passphrase into the PTY — see the helper at
+  local-testnet/pw.py.  Set a wide PTY window so long signed-tx hex is not wrapped.
 
 ──────────────────────────────────────────────────────────────────────────────
   Node starts then immediately exits (Exit 1)
@@ -1278,6 +1359,8 @@ Global flag (applies to every subcommand):
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   END OF GUIDE
-  RupeeCoin — Phases 0–14 complete.  37 test suites + 4 benchmark groups passing.
-  Security checklist: 7/7 items resolved.  Public testnet ready.
+  RupeeCoin — Phases 0–15 + audit passes A–E complete.  171 tests, 0 failures;
+  4 benchmark groups.  Security checklist: 7/7 resolved.  Node restarts cleanly
+  from persisted chain.  Next: external audit + Public Testnet (Zeta).
+  See HANDBOOK.md for the users / developers / investors guide.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━                                                                                                                                             
