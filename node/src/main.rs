@@ -1017,7 +1017,14 @@ async fn main() -> Result<()> {
                 }
 
                 let atts: Vec<Attestation> = pending_attestations.drain(..).collect();
-                let mut extra_txs = mempool.drain_for_block(50);
+                // Only include transfers that pay at least the next block's base
+                // fee, matching the chain's fee floor so we never build a block
+                // our own validation would reject.
+                let next_base_fee = rupeecoin_economics::next_base_fee(
+                    chain.tip().header.base_fee,
+                    chain.tip().header.gas_used,
+                );
+                let mut extra_txs = mempool.drain_for_block(50, next_base_fee);
 
                 // Auto-claim accrued validator rewards.
                 if is_validator {

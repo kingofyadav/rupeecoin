@@ -6,7 +6,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use rupeecoin_consensus::{select_proposer, slot_to_epoch, verify_block_vrf, SLOTS_PER_EPOCH};
 use rupeecoin_crypto::{hash_data, Hash, KeyPair, PublicKey, Signature, VrfProof};
 use rupeecoin_economics::{
-    apply_inactivity_leak, block_reward, compute_block_rewards, next_base_fee, route_fees,
+    apply_inactivity_leak, compute_block_rewards, next_base_fee, route_fees,
     treasury_address, PmfpAccumulator,
 };
 use rupeecoin_privacy::{CommitmentTree, Nullifier, PrivacyBlockApply, PrivacyTxError, SpendEvidence};
@@ -40,6 +40,10 @@ pub enum ChainError {
     MissingCoinbase,
     #[error("coinbase reward {0} exceeds limit {1}")]
     ExcessiveCoinbaseReward(u64, u64),
+    #[error("invalid coinbase distribution: {0}")]
+    InvalidCoinbaseDistribution(String),
+    #[error("transaction fee {paid} below required base fee {required}")]
+    InsufficientFee { paid: u64, required: u64 },
     #[error("non-coinbase transaction at index 0")]
     UnexpectedCoinbase,
     #[error("transaction error: {0}")]
@@ -152,6 +156,9 @@ impl Chain {
     ) -> Result<(), ChainError> {
         self.validate(&block, registry)?;
 
+        // Measure fees while the spent UTXOs are still present, before apply.
+        let total_fees = self.collected_fees(&block);
+
         // Compute the delta before applying (so we know which UTXOs existed).
         let mut delta = self.compute_delta(&block);
         self.utxo_set.apply_block(&block)?;
@@ -186,7 +193,7 @@ impl Chain {
             self.recent_roots.remove(0);
         }
 
-        self.apply_economics(&block, registry);
+        self.apply_economics(&block, registry, total_fees);
         self.apply_special_txs(&block, registry);
         // Push delta and block together so block_deltas[i] always matches blocks[i].
         self.block_deltas.push_back(delta);
@@ -356,7 +363,7 @@ impl Chain {
         }
     }
 
-    fn apply_economics(&mut self, block: &Block, registry: &mut ValidatorRegistry) {
+    fn apply_economics(&mut self, block: &Block, registry: &mut ValidatorRegistry, total_fees: u64) {
         let height = block.header.height;
         let slot = block.header.slot;
         let epoch = slot_to_epoch(slot);
@@ -373,7 +380,7 @@ impl Chain {
             registry.credit_rewards(addr, *amount);
         }
 
-        let fee_split = route_fees(block.header.gas_used, block.header.base_fee);
+        let fee_split = route_fees(total_fees);
         self.pmfp.add_fees(fee_split.pmfp_contribution);
 
         if height > 0 && slot % SLOTS_PER_EPOCH == 0 {
@@ -433,11 +440,13 @@ impl Chain {
         }
 
         // ── Coinbase reward ───────────────────────────────────────────────────
-        let max_reward = block_reward(block.header.height);
-        let coinbase_out: u64 = block.transactions[0].outputs.iter().map(|o| o.amount).sum();
-        if coinbase_out > max_reward {
-            return Err(ChainError::ExcessiveCoinbaseReward(coinbase_out, max_reward));
-        }
+        // The coinbase must pay *exactly* the protocol reward split — the
+        // proposer's proportional share plus the treasury (PDF) cut — and nothing
+        // more. Bounding only the sum would let a low-weight proposer mint the
+        // full gross reward to itself while every other validator still accrues
+        // its `validator_credits`, nearly doubling the intended emission.
+        let active_count = registry.active_count();
+        self.validate_coinbase(block, registry, active_count)?;
 
         // Accumulate claims/reports across the block so a proposer cannot mint
         // more than the available rewards by including the same claim twice, nor
@@ -472,6 +481,16 @@ impl Chain {
                 }
             } else {
                 self.utxo_set.validate_transfer(tx, block.header.height)?;
+                // A transfer must pay at least the block's base fee so the
+                // fee that later flows into the PMFP/burn split is real value
+                // actually surrendered by the sender (audit: fee accounting).
+                let fee = self.tx_fee(tx);
+                if fee < block.header.base_fee {
+                    return Err(ChainError::InsufficientFee {
+                        paid: fee,
+                        required: block.header.base_fee,
+                    });
+                }
             }
         }
 
@@ -505,7 +524,6 @@ impl Chain {
 
         // ── Consensus validation ──────────────────────────────────────────────
         let slot = block.header.slot;
-        let active_count = registry.active_count();
 
         if block.header.height > 0 {
             if active_count > 0 {
@@ -690,6 +708,99 @@ impl Chain {
             )));
         }
         Ok(())
+    }
+
+    /// Enforce that the coinbase pays exactly the protocol reward split: output 0
+    /// is the proposer's proportional share, output 1 is the treasury (PDF) cut.
+    /// Rejecting anything else stops a proposer from minting more than the
+    /// emission schedule allows.
+    fn validate_coinbase(
+        &self,
+        block: &Block,
+        registry: &ValidatorRegistry,
+        active_count: usize,
+    ) -> Result<(), ChainError> {
+        let coinbase = &block.transactions[0];
+        if coinbase.outputs.len() != 2 {
+            return Err(ChainError::InvalidCoinbaseDistribution(format!(
+                "coinbase must have exactly 2 outputs (proposer + treasury), got {}",
+                coinbase.outputs.len()
+            )));
+        }
+
+        // Resolve the proposer address exactly as build_coinbase / apply_economics.
+        let proposer_hash = if active_count > 0 {
+            registry
+                .active_set()
+                .get(block.header.proposer_index as usize)
+                .copied()
+                .unwrap_or_else(Hash::zero)
+        } else {
+            Hash::zero()
+        };
+        let split = compute_block_rewards(block.header.height, registry, &proposer_hash);
+
+        let proposer_out = &coinbase.outputs[0];
+        let treasury_out = &coinbase.outputs[1];
+
+        if proposer_out.amount != split.proposer_reward {
+            return Err(ChainError::InvalidCoinbaseDistribution(format!(
+                "proposer reward {} does not match expected {}",
+                proposer_out.amount, split.proposer_reward
+            )));
+        }
+        if treasury_out.amount != split.treasury_amount {
+            return Err(ChainError::InvalidCoinbaseDistribution(format!(
+                "treasury amount {} does not match expected {}",
+                treasury_out.amount, split.treasury_amount
+            )));
+        }
+        if treasury_out.recipient != treasury_address() {
+            return Err(ChainError::InvalidCoinbaseDistribution(
+                "treasury output must pay the canonical treasury address".into(),
+            ));
+        }
+        // With an active set the proposer's identity — and thus payout address —
+        // is fixed; pin output 0 to it. (In bootstrap there is no registered
+        // proposer to check against.)
+        if active_count > 0 {
+            if let Some(v) = registry.get(&proposer_hash) {
+                if proposer_out.recipient != v.pubkey.to_address() {
+                    return Err(ChainError::InvalidCoinbaseDistribution(
+                        "proposer output must pay the selected proposer's address".into(),
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Fee paid by a single transfer: Σ input amounts − Σ output amounts.
+    /// Only valid once the tx has passed `validate_transfer` (inputs exist and
+    /// input sum ≥ output sum) and while its inputs are still in the UTXO set.
+    fn tx_fee(&self, tx: &Transaction) -> u64 {
+        let in_sum: u64 = tx
+            .inputs
+            .iter()
+            .filter_map(|i| self.utxo_set.get(&i.outpoint))
+            .map(|o| o.amount)
+            .sum();
+        let out_sum: u64 = tx.outputs.iter().map(|o| o.amount).sum();
+        in_sum.saturating_sub(out_sum)
+    }
+
+    /// Total fees collected by a block. Coinbase, reward-claim and
+    /// slashing-report transactions carry no inputs and contribute nothing.
+    /// Must be called before the block is applied, while spent UTXOs still exist.
+    fn collected_fees(&self, block: &Block) -> u64 {
+        let mut fees: u64 = 0;
+        for tx in &block.transactions {
+            if tx.inputs.is_empty() {
+                continue;
+            }
+            fees = fees.saturating_add(self.tx_fee(tx));
+        }
+        fees
     }
 }
 
