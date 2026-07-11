@@ -97,7 +97,7 @@ impl Mempool {
             .filter(|(_, (_, fee))| *fee >= min_fee)
             .map(|(id, (_, fee))| (*id, *fee))
             .collect();
-        by_fee.sort_unstable_by(|a, b| b.1.cmp(&a.1)); // descending fee
+        by_fee.sort_unstable_by_key(|&(_, fee)| std::cmp::Reverse(fee)); // descending fee
         by_fee
             .into_iter()
             .take(limit)

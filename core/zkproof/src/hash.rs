@@ -68,11 +68,11 @@ pub fn get_mds_matrix() -> &'static [[u64; 8]; 8] {
     static MDS: OnceLock<[[u64; 8]; 8]> = OnceLock::new();
     MDS.get_or_init(|| {
         let mut m = [[0u64; 8]; 8];
-        for i in 0..8usize {
-            for j in 0..8usize {
+        for (i, row) in m.iter_mut().enumerate() {
+            for (j, cell) in row.iter_mut().enumerate() {
                 // denom = (i - (j+8)) mod P = P - (j+8-i)
                 let denom = GOLDILOCKS_P - (j + 8 - i) as u64;
-                m[i][j] = goldilocks_inv(denom);
+                *cell = goldilocks_inv(denom);
             }
         }
         m
@@ -86,8 +86,8 @@ pub fn get_round_constants() -> &'static [[Felt; 8]; 7] {
     static RC: OnceLock<[[Felt; 8]; 7]> = OnceLock::new();
     RC.get_or_init(|| {
         let mut rc = [[Felt::ZERO; 8]; 7];
-        for r in 0..7usize {
-            for c in 0..8usize {
+        for (r, row) in rc.iter_mut().enumerate() {
+            for (c, cell) in row.iter_mut().enumerate() {
                 let msg = format!("rupeecoin-poseidon-rc-r{r}-c{c}");
                 let hash = blake3::hash(msg.as_bytes());
                 let bytes = hash.as_bytes();
@@ -98,7 +98,7 @@ pub fn get_round_constants() -> &'static [[Felt; 8]; 7] {
                 } else {
                     raw
                 };
-                rc[r][c] = Felt::new(val);
+                *cell = Felt::new(val);
             }
         }
         rc
@@ -132,7 +132,7 @@ pub fn poseidon_round(state: &mut [Felt], round: usize) {
 
     // Add round constants
     for (s, &r) in state[..8].iter_mut().zip(rc[round].iter()) {
-        *s = *s + r;
+        *s += r;
     }
 }
 
@@ -206,7 +206,7 @@ pub fn eval_poseidon_round<E: FieldElement<BaseField = Felt>>(
     for i in 0..8 {
         let mut mds_out = E::ZERO;
         for j in 0..8 {
-            mds_out = mds_out + E::from(Felt::new(mds[i][j])) * sbox[j];
+            mds_out += E::from(Felt::new(mds[i][j])) * sbox[j];
         }
         result[i] = sel * (next[i] - (mds_out + rc[i]));
     }

@@ -77,7 +77,7 @@ pub fn merkle_root(txs: &[Transaction]) -> Hash {
         .map(|tx| leaf_hash(tx.txid().as_bytes()))
         .collect();
     while layer.len() > 1 {
-        let mut next = Vec::with_capacity((layer.len() + 1) / 2);
+        let mut next = Vec::with_capacity(layer.len().div_ceil(2));
         for pair in layer.chunks(2) {
             let right = if pair.len() == 2 { &pair[1] } else { &pair[0] };
             next.push(node_hash(&pair[0], right));
@@ -93,7 +93,7 @@ pub fn privacy_merkle_root(txs: &[PrivacyTransaction]) -> Hash {
     }
     let mut layer: Vec<Hash> = txs.iter().map(|tx| tx.hash()).collect();
     while layer.len() > 1 {
-        let mut next = Vec::with_capacity((layer.len() + 1) / 2);
+        let mut next = Vec::with_capacity(layer.len().div_ceil(2));
         for pair in layer.chunks(2) {
             let right = if pair.len() == 2 { &pair[1] } else { &pair[0] };
             next.push(rupeecoin_crypto::hash_concat(&pair[0], right));

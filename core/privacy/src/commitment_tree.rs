@@ -91,6 +91,10 @@ impl CommitmentTree {
         self.leaves.len()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.leaves.is_empty()
+    }
+
     /// Append a note commitment to the tree.
     ///
     /// Updates `frontier` in O(TREE_DEPTH) and pushes to `leaves` in O(1)
@@ -127,11 +131,11 @@ impl CommitmentTree {
     pub fn root(&self) -> Hash {
         let empties = empty_hashes();
         let mut cur: [u8; 32] = *empties[0].as_bytes();
-        for i in 0..TREE_DEPTH {
-            cur = if let Some(left) = self.frontier[i] {
-                poseidon_compress_bytes(&left, &cur)
+        for (slot, empty) in self.frontier.iter().zip(empties.iter()) {
+            cur = if let Some(left) = slot {
+                poseidon_compress_bytes(left, &cur)
             } else {
-                poseidon_compress_bytes(&cur, empties[i].as_bytes())
+                poseidon_compress_bytes(&cur, empty.as_bytes())
             };
         }
         Hash::from_bytes(cur)
@@ -161,7 +165,7 @@ impl CommitmentTree {
             };
             path.push((sibling, is_right));
 
-            let mut next = Vec::with_capacity((layer.len() + 1) / 2);
+            let mut next = Vec::with_capacity(layer.len().div_ceil(2));
             let mut i = 0;
             while i < layer.len() {
                 let left = layer[i];
@@ -238,7 +242,7 @@ mod tests {
         let mut layer: Vec<Hash> = leaves.iter().map(|cm| cm.0).collect();
         for level in 0..TREE_DEPTH {
             let empty = empty_hashes()[level];
-            let mut next = Vec::with_capacity((layer.len() + 1) / 2);
+            let mut next = Vec::with_capacity(layer.len().div_ceil(2));
             let mut i = 0;
             while i < layer.len() {
                 let left = layer[i];

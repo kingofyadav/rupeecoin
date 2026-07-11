@@ -8,7 +8,7 @@ use rupeecoin_privacy::{EncryptedNote, MerklePath, NoteCommitment, PrivacyTransa
 #[derive(Debug, Error)]
 pub enum RpcClientError {
     #[error("HTTP error: {0}")]
-    Http(#[from] ureq::Error),
+    Http(Box<ureq::Error>),
     #[error("JSON error: {0}")]
     Json(#[from] std::io::Error),
     #[error("hex decode: {0}")]
@@ -17,6 +17,12 @@ pub enum RpcClientError {
     Bincode(#[from] bincode::Error),
     #[error("invalid response: {0}")]
     Invalid(String),
+}
+
+impl From<ureq::Error> for RpcClientError {
+    fn from(e: ureq::Error) -> Self {
+        RpcClientError::Http(Box::new(e))
+    }
 }
 
 pub struct NodeRpc {

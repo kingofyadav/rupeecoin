@@ -6,7 +6,7 @@ mod keystore;
 mod node_rpc;
 mod scanner;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use clap::{Parser, Subcommand};
 
@@ -153,7 +153,7 @@ fn run(cli: Cli) -> anyhow::Result<()> {
 
 // ── generate ──────────────────────────────────────────────────────────────────
 
-fn cmd_generate(keys_path: &PathBuf) -> anyhow::Result<()> {
+fn cmd_generate(keys_path: &Path) -> anyhow::Result<()> {
     if keys_path.exists() {
         anyhow::bail!(
             "{} already exists — delete it first to regenerate",
@@ -184,7 +184,7 @@ fn cmd_generate(keys_path: &PathBuf) -> anyhow::Result<()> {
 
 // ── upgrade-hd ────────────────────────────────────────────────────────────────
 
-fn cmd_upgrade_hd(keys_path: &PathBuf) -> anyhow::Result<()> {
+fn cmd_upgrade_hd(keys_path: &Path) -> anyhow::Result<()> {
     let ks = keystore::load(keys_path)?;
 
     if ks.hd_master_seed.is_some() {
@@ -208,7 +208,7 @@ fn cmd_upgrade_hd(keys_path: &PathBuf) -> anyhow::Result<()> {
 
 // ── address ───────────────────────────────────────────────────────────────────
 
-fn cmd_address(keys_path: &PathBuf) -> anyhow::Result<()> {
+fn cmd_address(keys_path: &Path) -> anyhow::Result<()> {
     let ks = keystore::load(keys_path)?;
     let payment_hex = hex::encode(ks.bundle.payment_address.0.as_bytes());
     let vpk_hex = hex::encode(ks.bundle.view_key.public.as_bytes());
@@ -229,7 +229,7 @@ fn cmd_address(keys_path: &PathBuf) -> anyhow::Result<()> {
 
 // ── receive ───────────────────────────────────────────────────────────────────
 
-fn cmd_receive(keys_path: &PathBuf) -> anyhow::Result<()> {
+fn cmd_receive(keys_path: &Path) -> anyhow::Result<()> {
     let ks = keystore::load(keys_path)?;
     let seed = ks
         .hd_master_seed
@@ -253,7 +253,7 @@ fn cmd_receive(keys_path: &PathBuf) -> anyhow::Result<()> {
 
 // ── scan ──────────────────────────────────────────────────────────────────────
 
-fn cmd_scan(keys_path: &PathBuf, rpc_url: &str) -> anyhow::Result<()> {
+fn cmd_scan(keys_path: &Path, rpc_url: &str) -> anyhow::Result<()> {
     let ks = keystore::load(keys_path)?;
     let rpc = NodeRpc::new(rpc_url);
 
@@ -267,8 +267,8 @@ fn cmd_scan(keys_path: &PathBuf, rpc_url: &str) -> anyhow::Result<()> {
 
     let mut total_micro_rpc: u64 = 0;
     println!(
-        "{:<8}  {:>18}  {}",
-        "Index", "Value (RPC)", "Nullifier (first 16 hex chars)"
+        "{:<8}  {:>18}  Nullifier (first 16 hex chars)",
+        "Index", "Value (RPC)"
     );
     println!("{}", "─".repeat(72));
     for owned in &notes {
@@ -294,7 +294,7 @@ fn cmd_scan(keys_path: &PathBuf, rpc_url: &str) -> anyhow::Result<()> {
 // ── send ──────────────────────────────────────────────────────────────────────
 
 fn cmd_send(
-    keys_path: &PathBuf,
+    keys_path: &Path,
     rpc_url: &str,
     to_addr_input: &str,
     amount_rpc: f64,
@@ -441,7 +441,7 @@ fn cmd_send(
 
 // ── claim ─────────────────────────────────────────────────────────────────────
 
-fn cmd_claim(keys_path: &PathBuf, rpc_url: &str) -> anyhow::Result<()> {
+fn cmd_claim(keys_path: &Path, rpc_url: &str) -> anyhow::Result<()> {
     let ks = keystore::load(keys_path)?;
     let rpc = NodeRpc::new(rpc_url);
 
@@ -587,7 +587,7 @@ fn parse_payment_address(s: &str) -> anyhow::Result<ParsedRecipient> {
 /// Build and sign a transparent transfer, printing the signed hex suitable for
 /// pasting into the JS SDK demo's submit field (or piping to `POST /rpc/tx`).
 fn cmd_sign_tx(
-    keys_path: &std::path::PathBuf,
+    keys_path: &Path,
     rpc_url: &str,
     to_b58: &str,
     amount_rpc: f64,

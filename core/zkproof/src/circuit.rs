@@ -178,7 +178,7 @@ impl Air for SpendCircuit {
 
         // Round constants: 8 columns, period 8
         for col in 0..8 {
-            let mut v: Vec<Felt> = (0..7).map(|r| rc[r][col]).collect();
+            let mut v: Vec<Felt> = rc.iter().map(|round| round[col]).collect();
             v.push(Felt::ZERO);
             columns.push(v);
         }

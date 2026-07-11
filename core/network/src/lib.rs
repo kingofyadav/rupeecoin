@@ -115,8 +115,7 @@ impl request_response::Codec for SyncCodec {
     where
         T: AsyncWrite + Unpin + Send,
     {
-        let bytes =
-            bincode::serialize(&req).map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        let bytes = bincode::serialize(&req).map_err(io::Error::other)?;
         io.write_all(&(bytes.len() as u32).to_be_bytes()).await?;
         io.write_all(&bytes).await
     }
@@ -152,8 +151,7 @@ impl request_response::Codec for SyncCodec {
     where
         T: AsyncWrite + Unpin + Send,
     {
-        let bytes =
-            bincode::serialize(&resp).map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        let bytes = bincode::serialize(&resp).map_err(io::Error::other)?;
         io.write_all(&(bytes.len() as u32).to_be_bytes()).await?;
         io.write_all(&bytes).await
     }
@@ -332,6 +330,7 @@ pub fn start(
 
 // ── Swarm event loop ──────────────────────────────────────────────────────────
 
+#[allow(clippy::too_many_arguments)]
 async fn run(
     mut swarm: libp2p::Swarm<RupeeCoinBehaviour>,
     mut cmd_rx: mpsc::Receiver<NetworkCommand>,

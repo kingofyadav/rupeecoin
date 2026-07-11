@@ -85,7 +85,7 @@ pub fn rpc721_bytecode() -> Vec<u8> {
     a.push8(0).op(Op::MStore);
     a.op(Op::Dup2); // to
     a.push8(0); // from = 0 (mint)
-    a.push8(0x4d696E74); // "Mint"
+    a.push8(0x4D696E74); // "Mint"
     a.push8(8).push8(0).op(Op::Log3);
     // return new_id
     a.op(Op::Dup1).push8(0).op(Op::MStore);

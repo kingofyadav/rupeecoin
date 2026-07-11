@@ -178,6 +178,7 @@ fn node_submit_tx(node_rpc: &str, tx_hex: &str) -> Result<()> {
 
 // ── Transaction builder ───────────────────────────────────────────────────────
 
+#[allow(clippy::too_many_arguments)]
 fn build_drip_tx(
     seed: &[u8; 32],
     utxos: &[UtxoItem],

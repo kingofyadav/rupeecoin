@@ -262,7 +262,7 @@ impl UtxoSet {
             .collect();
 
         while layer.len() > 1 {
-            let mut next = Vec::with_capacity((layer.len() + 1) / 2);
+            let mut next = Vec::with_capacity(layer.len().div_ceil(2));
             for pair in layer.chunks(2) {
                 let right = if pair.len() == 2 { &pair[1] } else { &pair[0] };
                 next.push(node_hash(&pair[0], right));

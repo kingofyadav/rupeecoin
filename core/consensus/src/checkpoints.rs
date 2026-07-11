@@ -63,33 +63,29 @@ impl CheckpointManager {
 
     /// Verify that a block at `height` matches the trusted checkpoint.
     ///
-    /// Returns `Ok(())` if:
+    /// Returns `true` if:
     ///   - No checkpoint covers `height` (nothing to verify), or
     ///   - `height` is strictly below the checkpoint (already trusted), or
     ///   - `height` equals the checkpoint height and both `block_hash` and
     ///     `state_root` match.
     ///
-    /// Returns `Err(())` if `height` equals a checkpoint height but the hashes
+    /// Returns `false` if `height` equals a checkpoint height but the hashes
     /// do not match — indicating a chain fork or a tampered checkpoint.
     pub fn verify_checkpoint_block(
         &self,
         height: u64,
         block_hash: &Hash,
         state_root: &Hash,
-    ) -> Result<(), ()> {
+    ) -> bool {
         let Some(cp) = self.trusted.iter().find(|c| c.height == height) else {
-            return Ok(());
+            return true;
         };
-        if &cp.block_hash == block_hash && &cp.state_root == state_root {
-            Ok(())
-        } else {
-            Err(())
-        }
+        &cp.block_hash == block_hash && &cp.state_root == state_root
     }
 
     /// Whether a checkpoint should be created at `height`.
     pub fn should_checkpoint(height: u64) -> bool {
-        height > 0 && height % CHECKPOINT_INTERVAL == 0
+        height > 0 && height.is_multiple_of(CHECKPOINT_INTERVAL)
     }
 }
 

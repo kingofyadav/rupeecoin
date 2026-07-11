@@ -138,7 +138,7 @@ impl AttestationPool {
         // vote from the same validator is a duplicate (equivocation is the slashing
         // detector's concern, not ours here).
         let slot_votes = self.votes.entry(att.slot).or_default();
-        for (_, voters) in slot_votes.iter() {
+        for voters in slot_votes.values() {
             if voters.contains_key(&addr) {
                 return Err(ConsensusError::DuplicateAttestation(att.slot));
             }

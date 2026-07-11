@@ -81,7 +81,7 @@ fn main() -> Result<()> {
 
     // Greedy coin selection (largest first to minimise input count).
     let mut sorted = utxos;
-    sorted.sort_by(|a, b| b.amount_micro.cmp(&a.amount_micro));
+    sorted.sort_by_key(|u| std::cmp::Reverse(u.amount_micro));
     let mut selected = Vec::new();
     let mut total_in: u64 = 0;
     for u in &sorted {
@@ -169,9 +169,9 @@ struct UtxoItem {
 
 fn fetch_utxos(node_url: &str, addr_hex: &str) -> Result<Vec<UtxoItem>> {
     let url = format!("{node_url}/rpc/utxos?addr={addr_hex}");
-    Ok(ureq::get(&url)
+    ureq::get(&url)
         .call()
         .map_err(|e| anyhow!("GET {url}: {e}"))?
         .into_json::<Vec<UtxoItem>>()
-        .map_err(|e| anyhow!("decode UTXO response: {e}"))?)
+        .map_err(|e| anyhow!("decode UTXO response: {e}"))
 }

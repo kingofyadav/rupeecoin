@@ -964,7 +964,7 @@ async fn main() -> Result<()> {
                     if !pending_sync_heights.contains(&from) {
                         pending_sync_heights.insert(from);
                         let _ = net_cmd
-                            .send(NetworkCommand::RequestBlocks { peer: peer.clone(), from_height: from })
+                            .send(NetworkCommand::RequestBlocks { peer, from_height: from })
                             .await;
                     }
                     if is_validator {
@@ -1029,7 +1029,9 @@ async fn main() -> Result<()> {
             // ── Slot timer ────────────────────────────────────────────────────────
             _ = slot_timer.tick() => {
                 // Drain HTTP-submitted transparent txs into the mempool.
-                for tx in pending_txs.lock().unwrap().drain(..) {
+                // Collect first so the lock is not held across the broadcast await.
+                let drained: Vec<_> = std::mem::take(&mut *pending_txs.lock().unwrap());
+                for tx in drained {
                     if let Err(e) = mempool.add(tx.clone(), &chain.utxo_set, chain.height()) {
                         use rupeecoin_mempool::MempoolError;
                         if !matches!(e, MempoolError::Duplicate) {
@@ -1068,7 +1070,7 @@ async fn main() -> Result<()> {
                     continue;
                 }
 
-                let atts: Vec<Attestation> = pending_attestations.drain(..).collect();
+                let atts: Vec<Attestation> = std::mem::take(&mut pending_attestations);
                 // Only include transfers that pay at least the next block's base
                 // fee, matching the chain's fee floor so we never build a block
                 // our own validation would reject.

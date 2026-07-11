@@ -270,6 +270,6 @@ impl BalanceProof {
     pub fn verify(&self) -> bool {
         self.total_output
             .checked_add(self.fee)
-            .map_or(false, |rhs| self.total_input == rhs)
+            .is_some_and(|rhs| self.total_input == rhs)
     }
 }

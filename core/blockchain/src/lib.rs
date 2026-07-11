@@ -419,7 +419,7 @@ impl Chain {
         let fee_split = route_fees(total_fees);
         self.pmfp.add_fees(fee_split.pmfp_contribution);
 
-        if height > 0 && slot % SLOTS_PER_EPOCH == 0 {
+        if height > 0 && slot.is_multiple_of(SLOTS_PER_EPOCH) {
             // Process the epoch that just completed, not the one starting now.
             let completed_epoch = epoch.saturating_sub(1);
             registry.process_epoch_participation(completed_epoch);

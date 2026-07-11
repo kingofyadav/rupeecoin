@@ -48,7 +48,7 @@ pub struct Signature(pub(crate) Vec<u8>);
 
 impl std::fmt::Debug for PublicKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "PublicKey({}…)", &hex::encode(&self.0[..4]))
+        write!(f, "PublicKey({}…)", hex::encode(&self.0[..4]))
     }
 }
 

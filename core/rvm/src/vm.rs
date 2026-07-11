@@ -87,7 +87,7 @@ impl VmState {
         let gas = ctx.gas_limit;
         let mut memory = ctx.calldata.clone();
         // Pad calldata in memory to 8-byte boundary for clean MLOAD alignment
-        while memory.len() % 8 != 0 {
+        while !memory.len().is_multiple_of(8) {
             memory.push(0);
         }
         VmState {
@@ -275,7 +275,7 @@ fn run_inner(
             }
             Op::Div => {
                 let (a, b) = (s.pop(raw)?, s.pop(raw)?);
-                s.push(if b == 0 { 0 } else { a / b }, raw)?;
+                s.push(a.checked_div(b).unwrap_or(0), raw)?;
             }
             Op::Sdiv => {
                 let (a, b) = (s.pop(raw)? as i64, s.pop(raw)? as i64);
@@ -411,7 +411,7 @@ fn run_inner(
             Op::Blake3 => {
                 let (offset, len) = (s.pop(raw)? as usize, s.pop(raw)? as usize);
                 // charge 6 gas per 8-byte chunk
-                s.charge(6 * ((len as u64 + 7) / 8))?;
+                s.charge(6 * (len as u64).div_ceil(8))?;
                 let data = s.mem_slice(offset, len)?;
                 let hash = hash_data(&data);
                 // Push low 64 bits of BLAKE3 hash (big-endian first 8 bytes)

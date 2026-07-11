@@ -155,7 +155,7 @@ fn bundle_to_inner(
 ) -> KeystoreInner {
     KeystoreInner {
         spend_key_hex: hex::encode(bundle.spend_key.as_bytes()),
-        nullifier_key_hex: hex::encode(&bundle.nullifier_key.0),
+        nullifier_key_hex: hex::encode(bundle.nullifier_key.0),
         view_public_key_hex: hex::encode(bundle.view_key.public.as_bytes()),
         view_secret_key_hex: hex::encode(bundle.view_key.secret.as_bytes()),
         payment_address_hex: hex::encode(bundle.payment_address.0.as_bytes()),
@@ -229,7 +229,7 @@ pub fn save(
     let key = derive_key(password.as_bytes(), &salt);
     let inner = bundle_to_inner(bundle, hd_seed, receive_index);
     let plaintext = serde_json::to_vec(&inner)?;
-    let ct = encrypt(&plaintext, &*key, &nonce_bytes);
+    let ct = encrypt(&plaintext, &key, &nonce_bytes);
 
     let file = EncryptedKeystore {
         version: 3,
@@ -264,7 +264,7 @@ pub fn load(path: &Path) -> Result<LoadedKeystore, KeystoreError> {
                 .map_err(|_| KeystoreError::InvalidKey("bad ciphertext".into()))?;
 
             let key = derive_key(password.as_bytes(), &salt);
-            let pt = decrypt(&ct, &*key, &nonce)?;
+            let pt = decrypt(&ct, &key, &nonce)?;
             let inner: KeystoreInner = serde_json::from_slice(&pt)?;
             inner_to_loaded(&inner)
         }

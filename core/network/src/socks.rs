@@ -152,8 +152,8 @@ impl Transport for SocksTransport {
             Some(p) => p,
             None => return Err(TransportError::MultiaddrNotSupported(addr)),
         };
-        let (host, port) = multiaddr_to_host_port(&addr)
-            .ok_or_else(|| TransportError::MultiaddrNotSupported(addr))?;
+        let (host, port) =
+            multiaddr_to_host_port(&addr).ok_or(TransportError::MultiaddrNotSupported(addr))?;
         Ok(async move {
             let stream = socks5_connect(proxy, host, port).await?;
             Ok(stream.compat())

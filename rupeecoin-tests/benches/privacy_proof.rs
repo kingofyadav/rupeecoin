@@ -46,7 +46,10 @@ fn bench_verify(c: &mut Criterion) {
     group.measurement_time(Duration::from_secs(30));
 
     group.bench_function("verify_spend", |b| {
-        b.iter(|| black_box(verify_spend(&proof, nullifier).expect("verify_spend")))
+        b.iter(|| {
+            verify_spend(&proof, nullifier).expect("verify_spend");
+            black_box(())
+        })
     });
 
     group.finish();
@@ -90,7 +93,10 @@ fn bench_batch_verify(c: &mut Criterion) {
     group.measurement_time(Duration::from_secs(30));
 
     group.bench_function("verify_spend_batch_n2", |b| {
-        b.iter(|| black_box(verify_spend_batch(&proof2).expect("batch verify n=2")))
+        b.iter(|| {
+            verify_spend_batch(&proof2).expect("batch verify n=2");
+            black_box(())
+        })
     });
 
     group.finish();

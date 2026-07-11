@@ -192,7 +192,7 @@ impl Air for BatchedSpendCircuit {
             Felt::ZERO,
         ]);
         for col in 0..8 {
-            let mut v: Vec<Felt> = (0..7).map(|r| rc[r][col]).collect();
+            let mut v: Vec<Felt> = rc.iter().map(|round| round[col]).collect();
             v.push(Felt::ZERO);
             columns.push(v);
         }
@@ -240,7 +240,9 @@ pub fn build_batched_trace(witnesses: &[SpendWitness], total_blocks: usize) -> T
     let n = witnesses.len();
 
     // Pre-copy all block data (owned) so closures below have no borrow issues.
-    let blocks: Vec<([Felt; 4], [Felt; 4], [[Felt; 4]; 20], [bool; 20])> = (0..total_blocks)
+    // (nullifier_key, note_commitment, siblings, is_right) per 256-row block.
+    type BlockWitness = ([Felt; 4], [Felt; 4], [[Felt; 4]; 20], [bool; 20]);
+    let blocks: Vec<BlockWitness> = (0..total_blocks)
         .map(|k| {
             if k < n {
                 (
