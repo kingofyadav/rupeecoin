@@ -38,9 +38,9 @@ pub fn compute_merkle_root(
     let mut node = cm;
     for (i, sib) in siblings.iter().enumerate() {
         node = if is_right[i] {
-            compress(*sib, node)   // right child: parent = compress(sibling, node)
+            compress(*sib, node) // right child: parent = compress(sibling, node)
         } else {
-            compress(node, *sib)   // left child:  parent = compress(node, sibling)
+            compress(node, *sib) // left child:  parent = compress(node, sibling)
         };
     }
     node

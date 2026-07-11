@@ -87,7 +87,7 @@ impl VmState {
         let gas = ctx.gas_limit;
         let mut memory = ctx.calldata.clone();
         // Pad calldata in memory to 8-byte boundary for clean MLOAD alignment
-        while memory.len() % 8 != 0 {
+        while !memory.len().is_multiple_of(8) {
             memory.push(0);
         }
         VmState {
@@ -232,7 +232,13 @@ fn run_inner(
             // implicit STOP
             let gas_used = gas_limit - s.gas;
             let storage = s.storage;
-            return Ok((ExecResult::Return { data: vec![], gas_used }, Some(storage)));
+            return Ok((
+                ExecResult::Return {
+                    data: vec![],
+                    gas_used,
+                },
+                Some(storage),
+            ));
         }
 
         let raw = bytecode[s.pc];
@@ -245,7 +251,13 @@ fn run_inner(
             Op::Stop => {
                 let gas_used = gas_limit - s.gas;
                 let storage = s.storage;
-                return Ok((ExecResult::Return { data: vec![], gas_used }, Some(storage)));
+                return Ok((
+                    ExecResult::Return {
+                        data: vec![],
+                        gas_used,
+                    },
+                    Some(storage),
+                ));
             }
 
             // ── arithmetic ────────────────────────────────────────────────
@@ -263,7 +275,7 @@ fn run_inner(
             }
             Op::Div => {
                 let (a, b) = (s.pop(raw)?, s.pop(raw)?);
-                s.push(if b == 0 { 0 } else { a / b }, raw)?;
+                s.push(a.checked_div(b).unwrap_or(0), raw)?;
             }
             Op::Sdiv => {
                 let (a, b) = (s.pop(raw)? as i64, s.pop(raw)? as i64);
@@ -278,20 +290,36 @@ fn run_inner(
                 s.push(if b == 0 { 0 } else { (a % b) as u64 }, raw)?;
             }
             Op::Addmod => {
-                let (a, b, n) = (s.pop(raw)? as u128, s.pop(raw)? as u128, s.pop(raw)? as u128);
+                let (a, b, n) = (
+                    s.pop(raw)? as u128,
+                    s.pop(raw)? as u128,
+                    s.pop(raw)? as u128,
+                );
                 s.push(if n == 0 { 0 } else { ((a + b) % n) as u64 }, raw)?;
             }
             Op::Mulmod => {
-                let (a, b, n) = (s.pop(raw)? as u128, s.pop(raw)? as u128, s.pop(raw)? as u128);
+                let (a, b, n) = (
+                    s.pop(raw)? as u128,
+                    s.pop(raw)? as u128,
+                    s.pop(raw)? as u128,
+                );
                 s.push(if n == 0 { 0 } else { ((a * b) % n) as u64 }, raw)?;
             }
             Op::Exp => {
                 let (base, exp) = (s.pop(raw)?, s.pop(raw)?);
                 // charge extra: 5 gas per byte of exponent (simplified)
-                let exp_bytes = if exp == 0 { 0 } else { 8 - (exp.leading_zeros() / 8) as u64 };
+                let exp_bytes = if exp == 0 {
+                    0
+                } else {
+                    8 - (exp.leading_zeros() / 8) as u64
+                };
                 s.charge(5 * exp_bytes)?;
                 // H-21: exp > u32::MAX silently truncated in wrapping_pow; result is 0 per EVM spec
-                let result = if exp > u32::MAX as u64 { 0u64 } else { base.wrapping_pow(exp as u32) };
+                let result = if exp > u32::MAX as u64 {
+                    0u64
+                } else {
+                    base.wrapping_pow(exp as u32)
+                };
                 s.push(result, raw)?;
             }
             Op::AddOv => {
@@ -324,19 +352,55 @@ fn run_inner(
             }
 
             // ── comparison & bitwise ──────────────────────────────────────
-            Op::Lt     => { let (a, b) = (s.pop(raw)?, s.pop(raw)?); s.push((a < b) as u64, raw)?; }
-            Op::Gt     => { let (a, b) = (s.pop(raw)?, s.pop(raw)?); s.push((a > b) as u64, raw)?; }
-            Op::Slt    => { let (a, b) = (s.pop(raw)? as i64, s.pop(raw)? as i64); s.push((a < b) as u64, raw)?; }
-            Op::Sgt    => { let (a, b) = (s.pop(raw)? as i64, s.pop(raw)? as i64); s.push((a > b) as u64, raw)?; }
-            Op::Eq     => { let (a, b) = (s.pop(raw)?, s.pop(raw)?); s.push((a == b) as u64, raw)?; }
-            Op::IsZero => { let a = s.pop(raw)?; s.push((a == 0) as u64, raw)?; }
-            Op::And    => { let (a, b) = (s.pop(raw)?, s.pop(raw)?); s.push(a & b, raw)?; }
-            Op::Or     => { let (a, b) = (s.pop(raw)?, s.pop(raw)?); s.push(a | b, raw)?; }
-            Op::Xor    => { let (a, b) = (s.pop(raw)?, s.pop(raw)?); s.push(a ^ b, raw)?; }
-            Op::Not    => { let a = s.pop(raw)?; s.push(!a, raw)?; }
-            Op::Shl    => { let (shift, val) = (s.pop(raw)?, s.pop(raw)?); s.push(if shift >= 64 { 0 } else { val << shift }, raw)?; }
-            Op::Shr    => { let (shift, val) = (s.pop(raw)?, s.pop(raw)?); s.push(if shift >= 64 { 0 } else { val >> shift }, raw)?; }
-            Op::Sar    => {
+            Op::Lt => {
+                let (a, b) = (s.pop(raw)?, s.pop(raw)?);
+                s.push((a < b) as u64, raw)?;
+            }
+            Op::Gt => {
+                let (a, b) = (s.pop(raw)?, s.pop(raw)?);
+                s.push((a > b) as u64, raw)?;
+            }
+            Op::Slt => {
+                let (a, b) = (s.pop(raw)? as i64, s.pop(raw)? as i64);
+                s.push((a < b) as u64, raw)?;
+            }
+            Op::Sgt => {
+                let (a, b) = (s.pop(raw)? as i64, s.pop(raw)? as i64);
+                s.push((a > b) as u64, raw)?;
+            }
+            Op::Eq => {
+                let (a, b) = (s.pop(raw)?, s.pop(raw)?);
+                s.push((a == b) as u64, raw)?;
+            }
+            Op::IsZero => {
+                let a = s.pop(raw)?;
+                s.push((a == 0) as u64, raw)?;
+            }
+            Op::And => {
+                let (a, b) = (s.pop(raw)?, s.pop(raw)?);
+                s.push(a & b, raw)?;
+            }
+            Op::Or => {
+                let (a, b) = (s.pop(raw)?, s.pop(raw)?);
+                s.push(a | b, raw)?;
+            }
+            Op::Xor => {
+                let (a, b) = (s.pop(raw)?, s.pop(raw)?);
+                s.push(a ^ b, raw)?;
+            }
+            Op::Not => {
+                let a = s.pop(raw)?;
+                s.push(!a, raw)?;
+            }
+            Op::Shl => {
+                let (shift, val) = (s.pop(raw)?, s.pop(raw)?);
+                s.push(if shift >= 64 { 0 } else { val << shift }, raw)?;
+            }
+            Op::Shr => {
+                let (shift, val) = (s.pop(raw)?, s.pop(raw)?);
+                s.push(if shift >= 64 { 0 } else { val >> shift }, raw)?;
+            }
+            Op::Sar => {
                 let (shift, val) = (s.pop(raw)?, s.pop(raw)? as i64);
                 // H-22: threshold must be 64 (not 63); SAR by 63 is a valid shift
                 let result = if shift >= 64 { val >> 63 } else { val >> shift };
@@ -347,7 +411,7 @@ fn run_inner(
             Op::Blake3 => {
                 let (offset, len) = (s.pop(raw)? as usize, s.pop(raw)? as usize);
                 // charge 6 gas per 8-byte chunk
-                s.charge(6 * ((len as u64 + 7) / 8))?;
+                s.charge(6 * (len as u64).div_ceil(8))?;
                 let data = s.mem_slice(offset, len)?;
                 let hash = hash_data(&data);
                 // Push low 64 bits of BLAKE3 hash (big-endian first 8 bytes)
@@ -356,16 +420,39 @@ fn run_inner(
             }
 
             // ── context ───────────────────────────────────────────────────
-            Op::Caller    => { let v = s.ctx.caller;      s.push(v, raw)?; }
-            Op::CallValue => { let v = s.ctx.call_value;  s.push(v, raw)?; }
-            Op::Height    => { let v = s.ctx.block_height; s.push(v, raw)?; }
-            Op::Timestamp => { let v = s.ctx.timestamp;   s.push(v, raw)?; }
-            Op::ChainId   => { let v = s.ctx.chain_id;    s.push(v, raw)?; }
-            Op::SelfAddr  => { let v = s.ctx.self_addr;   s.push(v, raw)?; }
-            Op::GasLeft   => { let v = s.gas;             s.push(v, raw)?; }
+            Op::Caller => {
+                let v = s.ctx.caller;
+                s.push(v, raw)?;
+            }
+            Op::CallValue => {
+                let v = s.ctx.call_value;
+                s.push(v, raw)?;
+            }
+            Op::Height => {
+                let v = s.ctx.block_height;
+                s.push(v, raw)?;
+            }
+            Op::Timestamp => {
+                let v = s.ctx.timestamp;
+                s.push(v, raw)?;
+            }
+            Op::ChainId => {
+                let v = s.ctx.chain_id;
+                s.push(v, raw)?;
+            }
+            Op::SelfAddr => {
+                let v = s.ctx.self_addr;
+                s.push(v, raw)?;
+            }
+            Op::GasLeft => {
+                let v = s.gas;
+                s.push(v, raw)?;
+            }
 
             // ── stack ─────────────────────────────────────────────────────
-            Op::Pop => { s.pop(raw)?; }
+            Op::Pop => {
+                s.pop(raw)?;
+            }
 
             // ── memory ────────────────────────────────────────────────────
             Op::MLoad => {
@@ -441,8 +528,14 @@ fn run_inner(
             }
 
             // ── push ─────────────────────────────────────────────────────
-            Op::Push1 | Op::Push2 | Op::Push3 | Op::Push4 |
-            Op::Push5 | Op::Push6 | Op::Push7 | Op::Push8 => {
+            Op::Push1
+            | Op::Push2
+            | Op::Push3
+            | Op::Push4
+            | Op::Push5
+            | Op::Push6
+            | Op::Push7
+            | Op::Push8 => {
                 let n = op.immediate_bytes();
                 if s.pc + n > bytecode.len() {
                     return Err(VmError::UnknownOpcode(raw));
@@ -456,20 +549,44 @@ fn run_inner(
             }
 
             // ── dup ──────────────────────────────────────────────────────
-            Op::Dup1  | Op::Dup2  | Op::Dup3  | Op::Dup4  |
-            Op::Dup5  | Op::Dup6  | Op::Dup7  | Op::Dup8  |
-            Op::Dup9  | Op::Dup10 | Op::Dup11 | Op::Dup12 |
-            Op::Dup13 | Op::Dup14 | Op::Dup15 | Op::Dup16 => {
+            Op::Dup1
+            | Op::Dup2
+            | Op::Dup3
+            | Op::Dup4
+            | Op::Dup5
+            | Op::Dup6
+            | Op::Dup7
+            | Op::Dup8
+            | Op::Dup9
+            | Op::Dup10
+            | Op::Dup11
+            | Op::Dup12
+            | Op::Dup13
+            | Op::Dup14
+            | Op::Dup15
+            | Op::Dup16 => {
                 let depth = (raw - 0x7F) as usize; // Dup1 = 0x80 → depth 1
                 let val = s.peek(depth - 1, raw)?;
                 s.push(val, raw)?;
             }
 
             // ── swap ─────────────────────────────────────────────────────
-            Op::Swap1  | Op::Swap2  | Op::Swap3  | Op::Swap4  |
-            Op::Swap5  | Op::Swap6  | Op::Swap7  | Op::Swap8  |
-            Op::Swap9  | Op::Swap10 | Op::Swap11 | Op::Swap12 |
-            Op::Swap13 | Op::Swap14 | Op::Swap15 | Op::Swap16 => {
+            Op::Swap1
+            | Op::Swap2
+            | Op::Swap3
+            | Op::Swap4
+            | Op::Swap5
+            | Op::Swap6
+            | Op::Swap7
+            | Op::Swap8
+            | Op::Swap9
+            | Op::Swap10
+            | Op::Swap11
+            | Op::Swap12
+            | Op::Swap13
+            | Op::Swap14
+            | Op::Swap15
+            | Op::Swap16 => {
                 let depth = (raw - 0x8F) as usize; // Swap1 = 0x90 → depth 1
                 let len = s.stack.len();
                 if depth >= len {

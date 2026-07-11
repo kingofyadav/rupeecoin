@@ -5,7 +5,6 @@ use std::io::{self, stdout};
 use std::time::{Duration, Instant};
 
 use clap::Parser;
-use rupeecoin_crypto::decode_address;
 use crossterm::{
     event::{self, Event, KeyCode, KeyEventKind},
     execute,
@@ -15,12 +14,16 @@ use ratatui::{
     prelude::*,
     widgets::{Block, Borders, Gauge, Paragraph},
 };
+use rupeecoin_crypto::decode_address;
 use serde::Deserialize;
 
 // ── CLI ───────────────────────────────────────────────────────────────────────
 
 #[derive(Parser)]
-#[command(name = "rupeecoin-dashboard", about = "RupeeCoin validator dashboard TUI")]
+#[command(
+    name = "rupeecoin-dashboard",
+    about = "RupeeCoin validator dashboard TUI"
+)]
 struct Args {
     /// Node RPC base URL.
     #[arg(long, default_value = "http://127.0.0.1:9944")]
@@ -153,19 +156,35 @@ fn rpc_str(micro: u64) -> String {
 fn render_title(frame: &mut Frame, area: Rect, app: &App) {
     let connected = app.error.is_none() && app.status.is_some();
     let dot = if connected { "● " } else { "○ " };
-    let conn_str = if connected { "Connected" } else { "Disconnected" };
+    let conn_str = if connected {
+        "Connected"
+    } else {
+        "Disconnected"
+    };
     let update_str = match app.last_updated {
         Some(t) => format!("  Last update: {}s ago", t.elapsed().as_secs()),
         None => "  Waiting…".to_string(),
     };
 
     let line = Line::from(vec![
-        Span::styled("  ₹ RupeeCoin — Validator Dashboard  ", Style::new().bold().fg(Color::Yellow)),
+        Span::styled(
+            "  ₹ RupeeCoin — Validator Dashboard  ",
+            Style::new().bold().fg(Color::Yellow),
+        ),
         Span::raw("│  "),
-        Span::styled(dot, Style::new().fg(if connected { Color::Green } else { Color::Red })),
-        Span::styled(conn_str, Style::new().fg(if connected { Color::Green } else { Color::Red })),
+        Span::styled(
+            dot,
+            Style::new().fg(if connected { Color::Green } else { Color::Red }),
+        ),
+        Span::styled(
+            conn_str,
+            Style::new().fg(if connected { Color::Green } else { Color::Red }),
+        ),
         Span::styled(update_str, Style::new().fg(Color::DarkGray)),
-        Span::styled("  │  [q] Quit  [r] Refresh", Style::new().fg(Color::DarkGray)),
+        Span::styled(
+            "  │  [q] Quit  [r] Refresh",
+            Style::new().fg(Color::DarkGray),
+        ),
     ]);
     frame.render_widget(Paragraph::new(line), area);
 }
@@ -173,7 +192,10 @@ fn render_title(frame: &mut Frame, area: Rect, app: &App) {
 fn render_chain(frame: &mut Frame, area: Rect, app: &App) {
     let block = Block::new()
         .borders(Borders::ALL)
-        .title(Span::styled(" Chain Status ", Style::new().fg(Color::Cyan).bold()))
+        .title(Span::styled(
+            " Chain Status ",
+            Style::new().fg(Color::Cyan).bold(),
+        ))
         .border_style(Style::new().fg(Color::Cyan));
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -183,23 +205,39 @@ fn render_chain(frame: &mut Frame, area: Rect, app: &App) {
             kv_line("Height     ", &format_num(s.height), Color::White),
             kv_line("Slot       ", &format_num(s.slot), Color::White),
             kv_line("Epoch      ", &s.epoch.to_string(), Color::White),
-            kv_line("Justified  ", &s.last_justified_epoch.to_string(), Color::Green),
-            kv_line("Finalized  ", &s.last_finalized_epoch.to_string(), Color::Green),
+            kv_line(
+                "Justified  ",
+                &s.last_justified_epoch.to_string(),
+                Color::Green,
+            ),
+            kv_line(
+                "Finalized  ",
+                &s.last_finalized_epoch.to_string(),
+                Color::Green,
+            ),
             Line::raw(""),
             kv_line("Base Fee   ", &rpc_str(s.base_fee), Color::White),
-            kv_line("Validators ", &format!("{} active", s.active_validators), Color::White),
-            kv_line("Total Stake", &format!("{:.2} RPC", s.total_stake as f64 / 1e8), Color::White),
+            kv_line(
+                "Validators ",
+                &format!("{} active", s.active_validators),
+                Color::White,
+            ),
+            kv_line(
+                "Total Stake",
+                &format!("{:.2} RPC", s.total_stake as f64 / 1e8),
+                Color::White,
+            ),
         ]
     } else if let Some(e) = &app.error {
         vec![
             Line::raw(""),
-            Line::from(Span::styled(
-                format!("  {e}"),
-                Style::new().fg(Color::Red),
-            )),
+            Line::from(Span::styled(format!("  {e}"), Style::new().fg(Color::Red))),
         ]
     } else {
-        vec![Line::from(Span::styled("  Connecting…", Style::new().fg(Color::Yellow)))]
+        vec![Line::from(Span::styled(
+            "  Connecting…",
+            Style::new().fg(Color::Yellow),
+        ))]
     };
 
     frame.render_widget(Paragraph::new(lines), inner);
@@ -208,7 +246,10 @@ fn render_chain(frame: &mut Frame, area: Rect, app: &App) {
 fn render_pool(frame: &mut Frame, area: Rect, app: &App) {
     let block = Block::new()
         .borders(Borders::ALL)
-        .title(Span::styled(" Mempool & Privacy Pool ", Style::new().fg(Color::Cyan).bold()))
+        .title(Span::styled(
+            " Mempool & Privacy Pool ",
+            Style::new().fg(Color::Cyan).bold(),
+        ))
         .border_style(Style::new().fg(Color::Cyan));
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -216,8 +257,16 @@ fn render_pool(frame: &mut Frame, area: Rect, app: &App) {
     let lines: Vec<Line> = if let Some(s) = &app.status {
         vec![
             kv_line("Mempool txs    ", &s.mempool_size.to_string(), Color::White),
-            kv_line("Privacy pending", &s.pending_privacy_txs.to_string(), Color::White),
-            kv_line("Shielded notes ", &format_num(s.commitment_count), Color::White),
+            kv_line(
+                "Privacy pending",
+                &s.pending_privacy_txs.to_string(),
+                Color::White,
+            ),
+            kv_line(
+                "Shielded notes ",
+                &format_num(s.commitment_count),
+                Color::White,
+            ),
         ]
     } else {
         vec![]
@@ -266,11 +315,7 @@ fn render_validator(frame: &mut Frame, area: Rect, app: &App) {
     };
 
     // Split inner area: text info on top, gauge bars below.
-    let sections = Layout::vertical([
-        Constraint::Length(5),
-        Constraint::Min(0),
-    ])
-    .split(inner);
+    let sections = Layout::vertical([Constraint::Length(5), Constraint::Min(0)]).split(inner);
 
     let addr_str = app.addr.as_deref().unwrap_or("");
     let addr_disp = if addr_str.len() > 18 {
@@ -279,18 +324,32 @@ fn render_validator(frame: &mut Frame, area: Rect, app: &App) {
         addr_str.to_string()
     };
 
-    let status_color = if v.is_active { Color::Green } else { Color::Red };
+    let status_color = if v.is_active {
+        Color::Green
+    } else {
+        Color::Red
+    };
 
     let info_lines = vec![
         kv_line("Address", &addr_disp, Color::Cyan),
         kv_line("Status ", &v.status, status_color),
-        kv_line("Stake  ", &format!("{:.2} RPC", v.stake as f64 / 1e8), Color::White),
+        kv_line(
+            "Stake  ",
+            &format!("{:.2} RPC", v.stake as f64 / 1e8),
+            Color::White,
+        ),
         kv_line("Rewards", &rpc_str(v.claimable_rewards), Color::Yellow),
     ];
     frame.render_widget(Paragraph::new(info_lines), sections[0]);
 
     // Score gauges
-    render_score_gauge(frame, sections[1], v.uptime_score, v.proposal_score, v.total_score);
+    render_score_gauge(
+        frame,
+        sections[1],
+        v.uptime_score,
+        v.proposal_score,
+        v.total_score,
+    );
 }
 
 fn render_score_gauge(frame: &mut Frame, area: Rect, uptime: f64, proposal: f64, score: f64) {
@@ -333,7 +392,8 @@ fn render_status_bar(frame: &mut Frame, area: Rect, app: &App) {
     } else if app.status.is_some() {
         format!(
             " ✓  Connected  │  RPC: {}  │  refresh every {}s",
-            app.rpc, app.interval.as_secs()
+            app.rpc,
+            app.interval.as_secs()
         )
     } else {
         format!(" ○  Connecting to {} …", app.rpc)
@@ -361,18 +421,11 @@ fn ui(frame: &mut Frame, app: &App) {
     render_title(frame, root[0], app);
 
     // Main area: two columns
-    let columns = Layout::horizontal([
-        Constraint::Percentage(56),
-        Constraint::Percentage(44),
-    ])
-    .split(root[1]);
+    let columns =
+        Layout::horizontal([Constraint::Percentage(56), Constraint::Percentage(44)]).split(root[1]);
 
     // Left column: chain info on top, pool stats on bottom
-    let left = Layout::vertical([
-        Constraint::Min(0),
-        Constraint::Length(5),
-    ])
-    .split(columns[0]);
+    let left = Layout::vertical([Constraint::Min(0), Constraint::Length(5)]).split(columns[0]);
 
     render_chain(frame, left[0], app);
     render_pool(frame, left[1], app);
@@ -401,7 +454,10 @@ fn main() -> io::Result<()> {
     result
 }
 
-fn run_loop<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> io::Result<()> {
+fn run_loop(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    app: &mut App,
+) -> io::Result<()> {
     // Do an initial refresh immediately.
     app.refresh();
 

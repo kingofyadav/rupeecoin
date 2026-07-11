@@ -192,8 +192,14 @@ mod tests {
     fn block_reward_halving() {
         let cfg = GenesisConfig::mainnet();
         assert_eq!(cfg.block_reward_at(0), GENESIS_BLOCK_REWARD_MICRO_RPC);
-        assert_eq!(cfg.block_reward_at(HALVING_INTERVAL), GENESIS_BLOCK_REWARD_MICRO_RPC / 2);
-        assert_eq!(cfg.block_reward_at(HALVING_INTERVAL * 2), GENESIS_BLOCK_REWARD_MICRO_RPC / 4);
+        assert_eq!(
+            cfg.block_reward_at(HALVING_INTERVAL),
+            GENESIS_BLOCK_REWARD_MICRO_RPC / 2
+        );
+        assert_eq!(
+            cfg.block_reward_at(HALVING_INTERVAL * 2),
+            GENESIS_BLOCK_REWARD_MICRO_RPC / 4
+        );
     }
 
     #[test]

@@ -46,7 +46,9 @@ pub fn scan(
                         Ok(true) => continue,
                         Ok(false) => {}
                         Err(e) => {
-                            eprintln!("warning: nullifier check failed for note {index}: {e}; skipping");
+                            eprintln!(
+                                "warning: nullifier check failed for note {index}: {e}; skipping"
+                            );
                             continue;
                         }
                     }

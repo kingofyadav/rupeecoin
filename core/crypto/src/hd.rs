@@ -192,8 +192,18 @@ mod tests {
     #[test]
     fn to_keypair_is_deterministic() {
         let seed = [7u8; 32];
-        let kp1 = HdNode::master(&seed).child(HD_RECEIVE).unwrap().child(0).unwrap().to_keypair();
-        let kp2 = HdNode::master(&seed).child(HD_RECEIVE).unwrap().child(0).unwrap().to_keypair();
+        let kp1 = HdNode::master(&seed)
+            .child(HD_RECEIVE)
+            .unwrap()
+            .child(0)
+            .unwrap()
+            .to_keypair();
+        let kp2 = HdNode::master(&seed)
+            .child(HD_RECEIVE)
+            .unwrap()
+            .child(0)
+            .unwrap()
+            .to_keypair();
         assert_eq!(kp1.public_key, kp2.public_key);
     }
 }

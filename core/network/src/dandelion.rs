@@ -60,11 +60,7 @@ impl request_response::Codec for StemCodec {
     type Request = DandelionStemReq;
     type Response = DandelionStemAck;
 
-    async fn read_request<T>(
-        &mut self,
-        _: &StreamProtocol,
-        io: &mut T,
-    ) -> io::Result<Self::Request>
+    async fn read_request<T>(&mut self, _: &StreamProtocol, io: &mut T) -> io::Result<Self::Request>
     where
         T: AsyncRead + Unpin + Send,
     {
@@ -86,8 +82,7 @@ impl request_response::Codec for StemCodec {
         T: AsyncWrite + Unpin + Send,
     {
         use futures::AsyncWriteExt;
-        let bytes =
-            bincode::serialize(&req).map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        let bytes = bincode::serialize(&req).map_err(io::Error::other)?;
         io.write_all(&(bytes.len() as u32).to_be_bytes()).await?;
         io.write_all(&bytes).await
     }
@@ -183,14 +178,9 @@ impl DandelionRouter {
             .collect();
         expired
             .into_iter()
-            .filter_map(|id| {
-                self.pending
-                    .remove(&id)
-                    .map(|e| (id, e.tx_bytes))
-            })
+            .filter_map(|id| self.pending.remove(&id).map(|e| (id, e.tx_bytes)))
             .collect()
     }
-
 }
 
 // ── Peer selection ────────────────────────────────────────────────────────────
@@ -206,7 +196,7 @@ pub fn pick_stem_peer<R: Rng>(
 ) -> Option<PeerId> {
     let candidates: Vec<PeerId> = peers
         .iter()
-        .filter(|p| exclude.map_or(true, |e| *p != e))
+        .filter(|p| exclude != Some(*p))
         .copied()
         .collect();
     if candidates.is_empty() {
@@ -233,7 +223,7 @@ mod tests {
         for _ in 0..1_000 {
             let h = DandelionRouter::initial_hops(&mut rng);
             assert!(
-                h >= STEM_MIN_HOPS && h <= STEM_MAX_HOPS,
+                (STEM_MIN_HOPS..=STEM_MAX_HOPS).contains(&h),
                 "hop count {h} out of range [{STEM_MIN_HOPS}, {STEM_MAX_HOPS}]"
             );
         }
@@ -248,7 +238,10 @@ mod tests {
         }
         // Every value in [STEM_MIN_HOPS, STEM_MAX_HOPS] should appear.
         for h in STEM_MIN_HOPS..=STEM_MAX_HOPS {
-            assert!(seen.contains(&h), "hop count {h} never seen in 10 000 samples");
+            assert!(
+                seen.contains(&h),
+                "hop count {h} never seen in 10 000 samples"
+            );
         }
     }
 

@@ -4,9 +4,9 @@ use thiserror::Error;
 
 use crate::commitment_tree::CommitmentTree;
 use crate::note::{EncryptedNote, NoteCommitment, Nullifier};
-use crate::proof::{BalanceProof, BatchedStarkSpendProof, SpendEvidence};
 #[cfg(test)]
 use crate::proof::SpendProof;
+use crate::proof::{BalanceProof, BatchedStarkSpendProof, SpendEvidence};
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -137,10 +137,14 @@ impl ShieldedOutput {
     /// and the minimum-length guard on the ciphertext.
     pub fn validate(&self) -> Result<(), PrivacyTxError> {
         if self.value == 0 {
-            return Err(PrivacyTxError::InvalidOutputValue("zero-value notes are not allowed"));
+            return Err(PrivacyTxError::InvalidOutputValue(
+                "zero-value notes are not allowed",
+            ));
         }
         if self.value > MAX_NOTE_VALUE {
-            return Err(PrivacyTxError::InvalidOutputValue("value exceeds protocol cap"));
+            return Err(PrivacyTxError::InvalidOutputValue(
+                "value exceeds protocol cap",
+            ));
         }
         if self.encrypted_note.ciphertext.len() < MIN_CIPHERTEXT_LEN {
             return Err(PrivacyTxError::MalformedEncryptedNote);

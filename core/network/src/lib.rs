@@ -45,10 +45,7 @@ fn is_allowlisted(allowlist: Option<&HashSet<PeerId>>, peer: &PeerId) -> bool {
 
 /// Returns true if the peer has exceeded its rate limit, false if the message
 /// should be processed.  Resets the counter when the window expires.
-fn is_rate_limited(
-    peer_rate: &mut HashMap<PeerId, (u32, Instant)>,
-    peer: &PeerId,
-) -> bool {
+fn is_rate_limited(peer_rate: &mut HashMap<PeerId, (u32, Instant)>, peer: &PeerId) -> bool {
     let now = Instant::now();
     let entry = peer_rate.entry(*peer).or_insert((0, now));
     if now.duration_since(entry.1).as_secs() >= RATE_LIMIT_WINDOW_SECS {
@@ -118,8 +115,7 @@ impl request_response::Codec for SyncCodec {
     where
         T: AsyncWrite + Unpin + Send,
     {
-        let bytes =
-            bincode::serialize(&req).map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        let bytes = bincode::serialize(&req).map_err(io::Error::other)?;
         io.write_all(&(bytes.len() as u32).to_be_bytes()).await?;
         io.write_all(&bytes).await
     }
@@ -155,8 +151,7 @@ impl request_response::Codec for SyncCodec {
     where
         T: AsyncWrite + Unpin + Send,
     {
-        let bytes =
-            bincode::serialize(&resp).map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        let bytes = bincode::serialize(&resp).map_err(io::Error::other)?;
         io.write_all(&(bytes.len() as u32).to_be_bytes()).await?;
         io.write_all(&bytes).await
     }
@@ -258,8 +253,8 @@ pub fn start(
     if tor_proxy.is_some() {
         tracing::info!("Tor SOCKS5 proxy enabled: {:?}", tor_proxy);
     }
-    let swarm_builder = swarm_builder
-        .with_other_transport(|keypair| -> Result<_, Box<dyn std::error::Error + Send + Sync>> {
+    let swarm_builder = swarm_builder.with_other_transport(
+        |keypair| -> Result<_, Box<dyn std::error::Error + Send + Sync>> {
             let socks = socks::SocksTransport::from_option(tor_proxy);
             Ok(socks
                 .upgrade(upgrade::Version::V1)
@@ -270,9 +265,11 @@ pub fn start(
                 .multiplex(yamux::Config::default())
                 .map(|(peer_id, muxer), _| (peer_id, StreamMuxerBox::new(muxer)))
                 .boxed())
-        })?;
+        },
+    )?;
 
-    let mut swarm = swarm_builder.with_behaviour(|key| {
+    let mut swarm = swarm_builder
+        .with_behaviour(|key| {
             let gs_cfg = gossipsub::ConfigBuilder::default()
                 .heartbeat_interval(Duration::from_millis(700))
                 .validation_mode(ValidationMode::Strict)
@@ -333,6 +330,7 @@ pub fn start(
 
 // ── Swarm event loop ──────────────────────────────────────────────────────────
 
+#[allow(clippy::too_many_arguments)]
 async fn run(
     mut swarm: libp2p::Swarm<RupeeCoinBehaviour>,
     mut cmd_rx: mpsc::Receiver<NetworkCommand>,
@@ -494,7 +492,11 @@ async fn on_event(
                 message:
                     request_response::Message::Request {
                         request_id: _,
-                        request: DandelionStemReq { tx_bytes, remaining_hops },
+                        request:
+                            DandelionStemReq {
+                                tx_bytes,
+                                remaining_hops,
+                            },
                         channel,
                     },
             },
@@ -521,8 +523,7 @@ async fn on_event(
                         // Still in stem phase — track for timeout fallback.
                         dandelion.enter_stem(txid, tx_bytes.clone());
                         // Continue the stem: forward to one random non-sender peer.
-                        if let Some(next_peer) =
-                            pick_stem_peer(rng, connected_peers, Some(&sender))
+                        if let Some(next_peer) = pick_stem_peer(rng, connected_peers, Some(&sender))
                         {
                             swarm.behaviour_mut().dandelion_stem.send_request(
                                 &next_peer,
@@ -663,9 +664,15 @@ fn on_cmd(
     match cmd {
         NetworkCommand::BroadcastBlock(block) => {
             if let Ok(data) = bincode::serialize(&*block) {
-                match swarm.behaviour_mut().gossipsub.publish(block_topic.clone(), data) {
+                match swarm
+                    .behaviour_mut()
+                    .gossipsub
+                    .publish(block_topic.clone(), data)
+                {
                     Ok(_) => {}
-                    Err(gossipsub::PublishError::NoPeersSubscribedToTopic) => trace!("gossipsub publish block: no peers yet"),
+                    Err(gossipsub::PublishError::NoPeersSubscribedToTopic) => {
+                        trace!("gossipsub publish block: no peers yet")
+                    }
                     Err(e) => warn!("gossipsub publish block: {e}"),
                 }
             }
@@ -687,9 +694,15 @@ fn on_cmd(
                     debug!("dandelion: originated stem {txid} hops={hops} → {peer}");
                 } else {
                     // No connected peers — fall back to immediate gossipsub broadcast.
-                    match swarm.behaviour_mut().gossipsub.publish(tx_topic.clone(), data) {
+                    match swarm
+                        .behaviour_mut()
+                        .gossipsub
+                        .publish(tx_topic.clone(), data)
+                    {
                         Ok(_) => {}
-                        Err(gossipsub::PublishError::NoPeersSubscribedToTopic) => trace!("gossipsub publish tx: no peers yet"),
+                        Err(gossipsub::PublishError::NoPeersSubscribedToTopic) => {
+                            trace!("gossipsub publish tx: no peers yet")
+                        }
                         Err(e) => warn!("gossipsub publish tx: {e}"),
                     }
                 }
@@ -697,18 +710,30 @@ fn on_cmd(
         }
         NetworkCommand::BroadcastValidatorAnnouncement(ann) => {
             if let Ok(data) = bincode::serialize(&*ann) {
-                match swarm.behaviour_mut().gossipsub.publish(validator_topic.clone(), data) {
+                match swarm
+                    .behaviour_mut()
+                    .gossipsub
+                    .publish(validator_topic.clone(), data)
+                {
                     Ok(_) => {}
-                    Err(gossipsub::PublishError::NoPeersSubscribedToTopic) => trace!("gossipsub publish validator announcement: no peers yet"),
+                    Err(gossipsub::PublishError::NoPeersSubscribedToTopic) => {
+                        trace!("gossipsub publish validator announcement: no peers yet")
+                    }
                     Err(e) => warn!("gossipsub publish validator announcement: {e}"),
                 }
             }
         }
         NetworkCommand::BroadcastAttestation(att) => {
             if let Ok(data) = bincode::serialize(&*att) {
-                match swarm.behaviour_mut().gossipsub.publish(attestation_topic.clone(), data) {
+                match swarm
+                    .behaviour_mut()
+                    .gossipsub
+                    .publish(attestation_topic.clone(), data)
+                {
                     Ok(_) => {}
-                    Err(gossipsub::PublishError::NoPeersSubscribedToTopic) => trace!("gossipsub publish attestation: no peers yet"),
+                    Err(gossipsub::PublishError::NoPeersSubscribedToTopic) => {
+                        trace!("gossipsub publish attestation: no peers yet")
+                    }
                     Err(e) => warn!("gossipsub publish attestation: {e}"),
                 }
             }

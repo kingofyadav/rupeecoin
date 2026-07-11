@@ -7,9 +7,7 @@
 //!
 //! Run with:  cargo bench -p rupeecoin-tests --bench state_root
 
-use criterion::{
-    black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput,
-};
+use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 
 use rupeecoin_crypto::Address;
 use rupeecoin_types::{Transaction, TxOutput, MICRO_RPC_PER_COIN};
@@ -65,11 +63,9 @@ fn bench_state_root(c: &mut Criterion) {
         let utxo_set = make_utxo_set(n);
 
         group.throughput(Throughput::Elements(n as u64));
-        group.bench_with_input(
-            BenchmarkId::new("utxos", n),
-            &utxo_set,
-            |b, set| b.iter(|| black_box(set.state_root().expect("UTXO serialization failed"))),
-        );
+        group.bench_with_input(BenchmarkId::new("utxos", n), &utxo_set, |b, set| {
+            b.iter(|| black_box(set.state_root().expect("UTXO serialization failed")))
+        });
     }
 
     group.finish();

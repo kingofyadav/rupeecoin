@@ -138,7 +138,7 @@ impl AttestationPool {
         // vote from the same validator is a duplicate (equivocation is the slashing
         // detector's concern, not ours here).
         let slot_votes = self.votes.entry(att.slot).or_default();
-        for (_, voters) in slot_votes.iter() {
+        for voters in slot_votes.values() {
             if voters.contains_key(&addr) {
                 return Err(ConsensusError::DuplicateAttestation(att.slot));
             }
@@ -221,7 +221,8 @@ impl ConsensusState {
         let total_stake = registry.total_active_stake();
 
         // Register in LMD-GHOST block tree.
-        self.known_block_parents.insert(block_hash, block.header.prev_hash);
+        self.known_block_parents
+            .insert(block_hash, block.header.prev_hash);
         self.known_block_children
             .entry(block.header.prev_hash)
             .or_default()
@@ -323,7 +324,9 @@ impl ConsensusState {
     /// attestation validation.  Called for blocks that arrived on an alternative
     /// fork so `lmd_select_head` can consider them when choosing the heaviest path.
     pub fn register_fork_block(&mut self, block_hash: Hash, parent_hash: Hash) {
-        self.known_block_parents.entry(block_hash).or_insert(parent_hash);
+        self.known_block_parents
+            .entry(block_hash)
+            .or_insert(parent_hash);
         self.known_block_children
             .entry(parent_hash)
             .or_default()

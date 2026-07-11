@@ -54,7 +54,10 @@ impl Serialize for CommitmentTree {
         struct Wire<'a> {
             leaves: &'a Vec<NoteCommitment>,
         }
-        Wire { leaves: &self.leaves }.serialize(s)
+        Wire {
+            leaves: &self.leaves,
+        }
+        .serialize(s)
     }
 }
 
@@ -86,6 +89,10 @@ impl CommitmentTree {
 
     pub fn len(&self) -> usize {
         self.leaves.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.leaves.is_empty()
     }
 
     /// Append a note commitment to the tree.
@@ -124,11 +131,11 @@ impl CommitmentTree {
     pub fn root(&self) -> Hash {
         let empties = empty_hashes();
         let mut cur: [u8; 32] = *empties[0].as_bytes();
-        for i in 0..TREE_DEPTH {
-            cur = if let Some(left) = self.frontier[i] {
-                poseidon_compress_bytes(&left, &cur)
+        for (slot, empty) in self.frontier.iter().zip(empties.iter()) {
+            cur = if let Some(left) = slot {
+                poseidon_compress_bytes(left, &cur)
             } else {
-                poseidon_compress_bytes(&cur, empties[i].as_bytes())
+                poseidon_compress_bytes(&cur, empty.as_bytes())
             };
         }
         Hash::from_bytes(cur)
@@ -151,15 +158,22 @@ impl CommitmentTree {
             let empty = empty_hashes()[level];
             let is_right = idx % 2 == 1;
             let sibling_idx = idx ^ 1;
-            let sibling =
-                if sibling_idx < layer.len() { layer[sibling_idx] } else { empty };
+            let sibling = if sibling_idx < layer.len() {
+                layer[sibling_idx]
+            } else {
+                empty
+            };
             path.push((sibling, is_right));
 
-            let mut next = Vec::with_capacity((layer.len() + 1) / 2);
+            let mut next = Vec::with_capacity(layer.len().div_ceil(2));
             let mut i = 0;
             while i < layer.len() {
                 let left = layer[i];
-                let right = if i + 1 < layer.len() { layer[i + 1] } else { empty };
+                let right = if i + 1 < layer.len() {
+                    layer[i + 1]
+                } else {
+                    empty
+                };
                 next.push(Hash::from_bytes(poseidon_compress_bytes(
                     left.as_bytes(),
                     right.as_bytes(),
@@ -228,13 +242,18 @@ mod tests {
         let mut layer: Vec<Hash> = leaves.iter().map(|cm| cm.0).collect();
         for level in 0..TREE_DEPTH {
             let empty = empty_hashes()[level];
-            let mut next = Vec::with_capacity((layer.len() + 1) / 2);
+            let mut next = Vec::with_capacity(layer.len().div_ceil(2));
             let mut i = 0;
             while i < layer.len() {
                 let left = layer[i];
-                let right = if i + 1 < layer.len() { layer[i + 1] } else { empty };
+                let right = if i + 1 < layer.len() {
+                    layer[i + 1]
+                } else {
+                    empty
+                };
                 next.push(Hash::from_bytes(poseidon_compress_bytes(
-                    left.as_bytes(), right.as_bytes(),
+                    left.as_bytes(),
+                    right.as_bytes(),
                 )));
                 i += 2;
             }
@@ -262,11 +281,7 @@ mod tests {
         let mut tree = CommitmentTree::new();
         for n in 1u8..=10 {
             tree.append(mk_leaf(n));
-            assert_eq!(
-                tree.root(),
-                root_scratch(&tree.leaves),
-                "mismatch at n={n}"
-            );
+            assert_eq!(tree.root(), root_scratch(&tree.leaves), "mismatch at n={n}");
         }
     }
 

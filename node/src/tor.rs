@@ -105,10 +105,12 @@ pub async fn connect_via_socks5(
             0x06 => "TTL expired",
             0x07 => "command not supported",
             0x08 => "address type not supported",
-            c => return Err(std::io::Error::new(
-                std::io::ErrorKind::ConnectionRefused,
-                format!("SOCKS5 CONNECT rejected with code {c:#04x}"),
-            )),
+            c => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::ConnectionRefused,
+                    format!("SOCKS5 CONNECT rejected with code {c:#04x}"),
+                ))
+            }
         };
         return Err(std::io::Error::new(
             std::io::ErrorKind::ConnectionRefused,

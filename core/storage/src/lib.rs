@@ -71,7 +71,10 @@ impl ChainStore {
         .map(|name| ColumnFamilyDescriptor::new(name, Options::default()));
 
         let db = DB::open_cf_descriptors(&opts, path, cfs)?;
-        Ok(ChainStore { db: Arc::new(db), write_lock: Arc::new(Mutex::new(())) })
+        Ok(ChainStore {
+            db: Arc::new(db),
+            write_lock: Arc::new(Mutex::new(())),
+        })
     }
 
     /// Open the store in read-only mode — safe to use concurrently with a running node.
@@ -92,14 +95,20 @@ impl ChainStore {
             CF_ADDRESS_INDEX,
         ];
         let db = DB::open_cf_for_read_only(&opts, path, cf_names, false)?;
-        Ok(ChainStore { db: Arc::new(db), write_lock: Arc::new(Mutex::new(())) })
+        Ok(ChainStore {
+            db: Arc::new(db),
+            write_lock: Arc::new(Mutex::new(())),
+        })
     }
 
     /// Open the store as a RocksDB secondary instance.  `secondary_path` is a
     /// scratch directory (may not exist yet) used for WAL replay.  Call
     /// `try_catch_up_with_primary()` periodically to pick up new data from the
     /// running node without restarting.
-    pub fn open_secondary(primary_path: &Path, secondary_path: &Path) -> Result<Self, StorageError> {
+    pub fn open_secondary(
+        primary_path: &Path,
+        secondary_path: &Path,
+    ) -> Result<Self, StorageError> {
         let opts = Options::default();
         let cf_names = [
             CF_BLOCKS,
@@ -116,7 +125,10 @@ impl ChainStore {
         ];
         std::fs::create_dir_all(secondary_path).ok();
         let db = DB::open_cf_as_secondary(&opts, primary_path, secondary_path, cf_names)?;
-        Ok(ChainStore { db: Arc::new(db), write_lock: Arc::new(Mutex::new(())) })
+        Ok(ChainStore {
+            db: Arc::new(db),
+            write_lock: Arc::new(Mutex::new(())),
+        })
     }
 
     /// Pull the latest data from the primary node (no-op when opened normally).
@@ -137,7 +149,7 @@ impl ChainStore {
 
         let mut batch = WriteBatch::default();
         batch.put_cf(self.cf(CF_BLOCKS)?, hash.as_bytes(), &data);
-        batch.put_cf(self.cf(CF_HEIGHTS)?, &height_key, hash.as_bytes());
+        batch.put_cf(self.cf(CF_HEIGHTS)?, height_key, hash.as_bytes());
         self.db.write(batch)?;
         Ok(())
     }
@@ -151,7 +163,7 @@ impl ChainStore {
 
     pub fn get_block_by_height(&self, height: u64) -> Result<Option<Block>, StorageError> {
         let height_key = height.to_be_bytes();
-        let hash_bytes = match self.db.get_cf(self.cf(CF_HEIGHTS)?, &height_key)? {
+        let hash_bytes = match self.db.get_cf(self.cf(CF_HEIGHTS)?, height_key)? {
             Some(b) => b,
             None => return Ok(None),
         };
@@ -227,7 +239,7 @@ impl ChainStore {
         let mut tree = rupeecoin_privacy::CommitmentTree::new();
         for idx in 0..count {
             let key = idx.to_be_bytes();
-            match self.db.get_cf(self.cf(CF_NOTE_COMMITMENTS)?, &key)? {
+            match self.db.get_cf(self.cf(CF_NOTE_COMMITMENTS)?, key)? {
                 Some(b) => {
                     let cm: NoteCommitment = bincode::deserialize(&b)?;
                     tree.append(cm);
@@ -253,7 +265,7 @@ impl ChainStore {
         let mut results = Vec::new();
         for idx in start..end {
             let key = idx.to_be_bytes();
-            if let Some(b) = self.db.get_cf(self.cf(CF_SHIELDED_OUTPUTS)?, &key)? {
+            if let Some(b) = self.db.get_cf(self.cf(CF_SHIELDED_OUTPUTS)?, key)? {
                 let output: ShieldedOutput = bincode::deserialize(&b)?;
                 results.push((idx, output));
             }
@@ -274,7 +286,7 @@ impl ChainStore {
         let mut batch = WriteBatch::default();
 
         batch.put_cf(self.cf(CF_BLOCKS)?, hash.as_bytes(), &block_data);
-        batch.put_cf(self.cf(CF_HEIGHTS)?, &height_key, hash.as_bytes());
+        batch.put_cf(self.cf(CF_HEIGHTS)?, height_key, hash.as_bytes());
 
         // Transparent UTXO delta.
         for tx in &block.transactions {
@@ -304,23 +316,23 @@ impl ChainStore {
                 batch.put_cf(
                     self.cf(CF_NULLIFIERS)?,
                     input.nullifier.0.as_bytes(),
-                    &height_key,
+                    height_key,
                 );
             }
             for output in &privacy_tx.shielded_outputs {
                 let key = note_count.to_be_bytes();
                 let cm_val = bincode::serialize(&output.commitment)?;
-                batch.put_cf(self.cf(CF_NOTE_COMMITMENTS)?, &key, &cm_val);
+                batch.put_cf(self.cf(CF_NOTE_COMMITMENTS)?, key, &cm_val);
                 // Store full ShieldedOutput so wallets can scan encrypted notes.
                 let out_val = bincode::serialize(output)?;
-                batch.put_cf(self.cf(CF_SHIELDED_OUTPUTS)?, &key, &out_val);
+                batch.put_cf(self.cf(CF_SHIELDED_OUTPUTS)?, key, &out_val);
                 note_count += 1;
             }
         }
-        batch.put_cf(self.cf(CF_META)?, b"note_count", &note_count.to_be_bytes());
+        batch.put_cf(self.cf(CF_META)?, b"note_count", note_count.to_be_bytes());
 
         batch.put_cf(self.cf(CF_META)?, META_TIP_HASH, hash.as_bytes());
-        batch.put_cf(self.cf(CF_META)?, META_HEIGHT, &height_key);
+        batch.put_cf(self.cf(CF_META)?, META_HEIGHT, height_key);
 
         self.db.write(batch)?;
         Ok(())
@@ -382,17 +394,19 @@ impl ChainStore {
         let prefix = contract_addr.to_be_bytes();
         let mut map = std::collections::HashMap::new();
         // Iterate from the first key with this prefix.
-        for item in self.db.iterator_cf(cf, IteratorMode::From(&prefix, rocksdb::Direction::Forward)) {
+        for item in self
+            .db
+            .iterator_cf(cf, IteratorMode::From(&prefix, rocksdb::Direction::Forward))
+        {
             let (k, v) = item?;
             if k.len() != 16 || k[..8] != prefix {
                 break; // past this contract's keys
             }
             let slot = u64::from_be_bytes(k[8..16].try_into().unwrap());
-            let val = u64::from_be_bytes(
-                v.as_ref()
-                    .try_into()
-                    .map_err(|_| StorageError::Corruption("contract storage value corrupt".into()))?,
-            );
+            let val =
+                u64::from_be_bytes(v.as_ref().try_into().map_err(|_| {
+                    StorageError::Corruption("contract storage value corrupt".into())
+                })?);
             map.insert(slot, val);
         }
         Ok(map)
@@ -408,7 +422,7 @@ impl ChainStore {
         let cf = self.cf(CF_CONTRACT_STORAGE)?;
         for (&slot, &val) in storage {
             let key = Self::contract_storage_key(contract_addr, slot);
-            batch.put_cf(cf, &key, &val.to_be_bytes());
+            batch.put_cf(cf, key, val.to_be_bytes());
         }
         self.db.write(batch)?;
         Ok(())
@@ -417,16 +431,20 @@ impl ChainStore {
     // ── RVM contract bytecode (CF_CONTRACT_CODE) ─────────────────────────────
 
     /// Persist the bytecode of a deployed contract.  Key = addr as 8-byte BE.
-    pub fn save_contract_code(&self, contract_addr: u64, bytecode: &[u8]) -> Result<(), StorageError> {
+    pub fn save_contract_code(
+        &self,
+        contract_addr: u64,
+        bytecode: &[u8],
+    ) -> Result<(), StorageError> {
         let key = contract_addr.to_be_bytes();
-        self.db.put_cf(self.cf(CF_CONTRACT_CODE)?, &key, bytecode)?;
+        self.db.put_cf(self.cf(CF_CONTRACT_CODE)?, key, bytecode)?;
         Ok(())
     }
 
     /// Load bytecode for `contract_addr`, returning `None` if not deployed.
     pub fn load_contract_code(&self, contract_addr: u64) -> Result<Option<Vec<u8>>, StorageError> {
         let key = contract_addr.to_be_bytes();
-        Ok(self.db.get_cf(self.cf(CF_CONTRACT_CODE)?, &key)?)
+        Ok(self.db.get_cf(self.cf(CF_CONTRACT_CODE)?, key)?)
     }
 
     // ── Raw meta key/value (for node-layer persistence) ──────────────────────
@@ -448,7 +466,7 @@ impl ChainStore {
     pub fn save_checkpoint(&self, cp: &WeakSubjectivityCheckpoint) -> Result<(), StorageError> {
         let key = cp.height.to_be_bytes();
         let val = bincode::serialize(cp)?;
-        self.db.put_cf(self.cf(CF_CHECKPOINTS)?, &key, &val)?;
+        self.db.put_cf(self.cf(CF_CHECKPOINTS)?, key, &val)?;
         Ok(())
     }
 

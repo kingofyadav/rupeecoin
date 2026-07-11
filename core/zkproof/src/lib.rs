@@ -4,7 +4,7 @@ pub mod hash;
 pub mod prover;
 pub mod types;
 
-pub use batch::{BatchedSpendPublicInputs, BatchedSpendCircuit, BatchSpendProver};
+pub use batch::{BatchSpendProver, BatchedSpendCircuit, BatchedSpendPublicInputs};
 pub use circuit::{SpendCircuit, SpendPublicInputs};
 pub use hash::compress_bytes as poseidon_compress_bytes;
 pub use prover::{
@@ -13,5 +13,5 @@ pub use prover::{
 };
 pub use types::{
     prove_spend, prove_spend_batch, verify_spend, verify_spend_batch, verify_spend_raw,
-    BatchedStarkSpendProof, BatchSpendInput, StarkSpendProof, ZkError,
+    BatchSpendInput, BatchedStarkSpendProof, StarkSpendProof, ZkError,
 };

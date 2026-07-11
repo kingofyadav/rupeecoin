@@ -112,10 +112,9 @@ Remaining known limitations (accepted design or future phases):
 
 ### 15.2 Public Validator Onboarding
 
-- Written guide: how to join the Zeta testnet (`--stake 10000 --rpc-port 9944`)
-- Publish bootnode multiaddrs and latest checkpoint hash
+- ✅ Written guide: how to join the Zeta testnet — [`docs/testnet-validator.md`](docs/testnet-validator.md)
+- Publish bootnode multiaddrs and latest checkpoint hash (at Zeta launch)
 - Target: 100 external validators running continuously for 30 days
-- Deliverable: `docs/testnet-validator.md`
 
 ---
 

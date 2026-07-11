@@ -96,18 +96,24 @@ async fn socks5_connect(proxy: SocketAddr, host: String, port: u16) -> std::io::
     }
     // Consume bound-address fields.
     match resp[3] {
-        0x01 => { s.read_exact(&mut [0u8; 6]).await?; }
+        0x01 => {
+            s.read_exact(&mut [0u8; 6]).await?;
+        }
         0x03 => {
             let mut len = [0u8; 1];
             s.read_exact(&mut len).await?;
             let mut tail = vec![0u8; len[0] as usize + 2];
             s.read_exact(&mut tail).await?;
         }
-        0x04 => { s.read_exact(&mut [0u8; 18]).await?; }
-        atyp => return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            format!("SOCKS5 unknown ATYP in response: {atyp:#04x}"),
-        )),
+        0x04 => {
+            s.read_exact(&mut [0u8; 18]).await?;
+        }
+        atyp => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("SOCKS5 unknown ATYP in response: {atyp:#04x}"),
+            ))
+        }
     }
     Ok(s)
 }
@@ -146,8 +152,8 @@ impl Transport for SocksTransport {
             Some(p) => p,
             None => return Err(TransportError::MultiaddrNotSupported(addr)),
         };
-        let (host, port) = multiaddr_to_host_port(&addr)
-            .ok_or_else(|| TransportError::MultiaddrNotSupported(addr))?;
+        let (host, port) =
+            multiaddr_to_host_port(&addr).ok_or(TransportError::MultiaddrNotSupported(addr))?;
         Ok(async move {
             let stream = socks5_connect(proxy, host, port).await?;
             Ok(stream.compat())

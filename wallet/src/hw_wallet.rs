@@ -14,7 +14,7 @@
 /// let hw = MockHardwareWallet::new(seed);
 /// let sig = hw.sign_transaction(&tx_bytes, path).unwrap();
 /// ```
-use rupeecoin_crypto::{KeyPair, HdNode, HD_RECEIVE, Signature};
+use rupeecoin_crypto::{HdNode, KeyPair, Signature, HD_RECEIVE};
 
 // ── Error ─────────────────────────────────────────────────────────────────────
 
@@ -67,7 +67,9 @@ pub struct DerivationPath {
 impl DerivationPath {
     /// Standard transparent receive path at `index`.
     pub fn receive(index: u32) -> Self {
-        DerivationPath { indices: vec![HD_RECEIVE, index] }
+        DerivationPath {
+            indices: vec![HD_RECEIVE, index],
+        }
     }
 }
 
@@ -117,13 +119,16 @@ pub struct MockHardwareWallet {
 impl MockHardwareWallet {
     /// Create a mock device from a 32-byte HD master seed.
     pub fn new(master_seed: &[u8; 32]) -> Self {
-        MockHardwareWallet { master: HdNode::master(master_seed) }
+        MockHardwareWallet {
+            master: HdNode::master(master_seed),
+        }
     }
 
     fn derive_keypair(&self, path: &DerivationPath) -> Result<KeyPair, HwError> {
         let mut node = self.master.clone();
         for &idx in &path.indices {
-            node = node.child(idx)
+            node = node
+                .child(idx)
                 .map_err(|_| HwError::UnsupportedPath(format!("depth overflow at index {idx}")))?;
         }
         Ok(node.to_keypair())
@@ -177,8 +182,15 @@ mod tests {
         // Derive the keypair manually and verify.
         let seed = test_seed();
         let master = HdNode::master(&seed);
-        let kp = master.child(HD_RECEIVE).unwrap().child(0).unwrap().to_keypair();
-        kp.public_key.verify(message, &sig).expect("signature should verify");
+        let kp = master
+            .child(HD_RECEIVE)
+            .unwrap()
+            .child(0)
+            .unwrap()
+            .to_keypair();
+        kp.public_key
+            .verify(message, &sig)
+            .expect("signature should verify");
     }
 
     #[test]

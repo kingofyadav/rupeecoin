@@ -101,11 +101,18 @@ impl Drop for LoadedKeystore {
 // ── Crypto helpers ─────────────────────────────────────────────────────────────
 
 fn derive_key(password: &[u8], salt: &[u8]) -> Zeroizing<[u8; ARGON2_OUT_LEN]> {
-    let params =
-        Params::new(ARGON2_MEM_KIB, ARGON2_ITERS, ARGON2_LANES, Some(ARGON2_OUT_LEN)).unwrap();
+    let params = Params::new(
+        ARGON2_MEM_KIB,
+        ARGON2_ITERS,
+        ARGON2_LANES,
+        Some(ARGON2_OUT_LEN),
+    )
+    .unwrap();
     let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
     let mut key = Zeroizing::new([0u8; ARGON2_OUT_LEN]);
-    argon2.hash_password_into(password, salt, key.as_mut()).expect("argon2 params are valid");
+    argon2
+        .hash_password_into(password, salt, key.as_mut())
+        .expect("argon2 params are valid");
     key
 }
 
@@ -113,7 +120,10 @@ fn encrypt(plaintext: &[u8], key: &[u8; 32], nonce: &[u8; 24]) -> Vec<u8> {
     XChaCha20Poly1305::new(Key::from_slice(key))
         .encrypt(
             XNonce::from_slice(nonce),
-            chacha20poly1305::aead::Payload { msg: plaintext, aad: KEYSTORE_AD },
+            chacha20poly1305::aead::Payload {
+                msg: plaintext,
+                aad: KEYSTORE_AD,
+            },
         )
         .expect("encryption is infallible for valid params")
 }
@@ -122,7 +132,10 @@ fn decrypt(ct: &[u8], key: &[u8; 32], nonce: &[u8; 24]) -> Result<Vec<u8>, Keyst
     XChaCha20Poly1305::new(Key::from_slice(key))
         .decrypt(
             XNonce::from_slice(nonce),
-            chacha20poly1305::aead::Payload { msg: ct, aad: KEYSTORE_AD },
+            chacha20poly1305::aead::Payload {
+                msg: ct,
+                aad: KEYSTORE_AD,
+            },
         )
         .map_err(|_| KeystoreError::DecryptionFailed)
 }
@@ -142,7 +155,7 @@ fn bundle_to_inner(
 ) -> KeystoreInner {
     KeystoreInner {
         spend_key_hex: hex::encode(bundle.spend_key.as_bytes()),
-        nullifier_key_hex: hex::encode(&bundle.nullifier_key.0),
+        nullifier_key_hex: hex::encode(bundle.nullifier_key.0),
         view_public_key_hex: hex::encode(bundle.view_key.public.as_bytes()),
         view_secret_key_hex: hex::encode(bundle.view_key.secret.as_bytes()),
         payment_address_hex: hex::encode(bundle.payment_address.0.as_bytes()),
@@ -216,7 +229,7 @@ pub fn save(
     let key = derive_key(password.as_bytes(), &salt);
     let inner = bundle_to_inner(bundle, hd_seed, receive_index);
     let plaintext = serde_json::to_vec(&inner)?;
-    let ct = encrypt(&plaintext, &*key, &nonce_bytes);
+    let ct = encrypt(&plaintext, &key, &nonce_bytes);
 
     let file = EncryptedKeystore {
         version: 3,
@@ -251,13 +264,14 @@ pub fn load(path: &Path) -> Result<LoadedKeystore, KeystoreError> {
                 .map_err(|_| KeystoreError::InvalidKey("bad ciphertext".into()))?;
 
             let key = derive_key(password.as_bytes(), &salt);
-            let pt = decrypt(&ct, &*key, &nonce)?;
+            let pt = decrypt(&ct, &key, &nonce)?;
             let inner: KeystoreInner = serde_json::from_slice(&pt)?;
             inner_to_loaded(&inner)
         }
         1 => Err(KeystoreError::InvalidKey(
             "keystore v1 stores private keys in plaintext and is no longer supported. \
-             Please run `rupeecoin-wallet generate` to create a v3 encrypted keystore.".into(),
+             Please run `rupeecoin-wallet generate` to create a v3 encrypted keystore."
+                .into(),
         )),
         v => Err(KeystoreError::InvalidKey(format!(
             "unsupported keystore version {v}; expected version 2 or 3. \

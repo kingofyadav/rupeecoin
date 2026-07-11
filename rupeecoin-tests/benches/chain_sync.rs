@@ -9,9 +9,7 @@
 //!
 //! Run with:  cargo bench -p rupeecoin-tests --bench chain_sync
 
-use criterion::{
-    black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput,
-};
+use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 
 use rupeecoin_blockchain::{build_block, genesis_block, Chain};
 use rupeecoin_crypto::KeyPair;
@@ -41,7 +39,9 @@ fn prebuilt_blocks(kp: &KeyPair, n: u64) -> Vec<Block> {
     let mut blocks = Vec::with_capacity(n as usize);
     for _ in 0..n {
         let block = build_block(&chain, kp, &registry, vec![], vec![], vec![]);
-        chain.add_block(block.clone(), &mut registry).expect("prebuilt add_block");
+        chain
+            .add_block(block.clone(), &mut registry)
+            .expect("prebuilt add_block");
         blocks.push(block);
     }
     blocks
@@ -57,29 +57,25 @@ fn bench_chain_sync(c: &mut Criterion) {
         let blocks = prebuilt_blocks(&kp, n);
 
         group.throughput(Throughput::Elements(n));
-        group.bench_with_input(
-            BenchmarkId::new("blocks", n),
-            &blocks,
-            |b, blocks| {
-                b.iter_batched(
-                    || {
-                        // Setup (not timed): fresh target chain + registry.
-                        let chain = Chain::new(genesis_block());
-                        let registry = fresh_registry(&kp);
-                        (chain, registry)
-                    },
-                    |(mut chain, mut registry)| {
-                        for block in blocks {
-                            chain
-                                .add_block(block.clone(), &mut registry)
-                                .expect("sync add_block");
-                        }
-                        black_box(chain.height())
-                    },
-                    criterion::BatchSize::SmallInput,
-                )
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("blocks", n), &blocks, |b, blocks| {
+            b.iter_batched(
+                || {
+                    // Setup (not timed): fresh target chain + registry.
+                    let chain = Chain::new(genesis_block());
+                    let registry = fresh_registry(&kp);
+                    (chain, registry)
+                },
+                |(mut chain, mut registry)| {
+                    for block in blocks {
+                        chain
+                            .add_block(block.clone(), &mut registry)
+                            .expect("sync add_block");
+                    }
+                    black_box(chain.height())
+                },
+                criterion::BatchSize::SmallInput,
+            )
+        });
     }
 
     group.finish();

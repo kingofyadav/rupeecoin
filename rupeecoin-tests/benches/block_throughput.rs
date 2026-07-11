@@ -7,9 +7,7 @@
 //!
 //! Run with:  cargo bench -p rupeecoin-tests --bench block_throughput
 
-use criterion::{
-    black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput,
-};
+use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 
 use rupeecoin_blockchain::{build_block, genesis_block, Chain};
 use rupeecoin_crypto::KeyPair;
@@ -46,9 +44,7 @@ fn bench_build_block(c: &mut Criterion) {
     let (chain, registry) = build_chain(&kp, 0);
 
     c.bench_function("build_block/single", |b| {
-        b.iter(|| {
-            black_box(build_block(&chain, &kp, &registry, vec![], vec![], vec![]))
-        })
+        b.iter(|| black_box(build_block(&chain, &kp, &registry, vec![], vec![], vec![])))
     });
 }
 
@@ -69,8 +65,7 @@ fn bench_add_block(c: &mut Criterion) {
                 },
                 |(mut chain, mut registry)| {
                     for _ in 0..n {
-                        let block =
-                            build_block(&chain, &kp, &registry, vec![], vec![], vec![]);
+                        let block = build_block(&chain, &kp, &registry, vec![], vec![], vec![]);
                         chain.add_block(block, &mut registry).expect("add_block");
                     }
                     black_box(chain.height())

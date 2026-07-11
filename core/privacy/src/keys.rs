@@ -13,8 +13,14 @@ const KYBER768_SK_BYTES: usize = 2400;
 const KYBER768_COINS_BYTES: usize = 64;
 
 // Link-time assertions to catch upstream size changes before they silently corrupt keys.
-const _: () = assert!(KYBER768_PK_BYTES == 1184, "Kyber768 public key size changed");
-const _: () = assert!(KYBER768_SK_BYTES == 2400, "Kyber768 secret key size changed");
+const _: () = assert!(
+    KYBER768_PK_BYTES == 1184,
+    "Kyber768 public key size changed"
+);
+const _: () = assert!(
+    KYBER768_SK_BYTES == 2400,
+    "Kyber768 secret key size changed"
+);
 const _: () = assert!(KYBER768_COINS_BYTES == 64, "Kyber768 coins size changed");
 
 extern "C" {

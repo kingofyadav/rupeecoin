@@ -48,7 +48,7 @@ pub struct Signature(pub(crate) Vec<u8>);
 
 impl std::fmt::Debug for PublicKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "PublicKey({}…)", &hex::encode(&self.0[..4]))
+        write!(f, "PublicKey({}…)", hex::encode(&self.0[..4]))
     }
 }
 
@@ -106,7 +106,10 @@ impl KeyPair {
                 dil_seed.as_bytes().as_ptr(),
             )
         };
-        assert_eq!(ret, 0, "PQCLEAN_DILITHIUM3_CLEAN_crypto_sign_seed_keypair failed");
+        assert_eq!(
+            ret, 0,
+            "PQCLEAN_DILITHIUM3_CLEAN_crypto_sign_seed_keypair failed"
+        );
 
         let pk = dilithium3::PublicKey::from_bytes(&pk_bytes).expect("valid pk from seed");
         let sk = dilithium3::SecretKey::from_bytes(&sk_bytes).expect("valid sk from seed");

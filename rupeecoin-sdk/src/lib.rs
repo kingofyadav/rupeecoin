@@ -27,13 +27,13 @@ pub use rpc::{NodeStatus, RpcClient, UtxoEntry};
 // ── Re-exported core types ────────────────────────────────────────────────────
 
 pub use rupeecoin_crypto::{
-    decode_address, encode_address, hash_data, Address, Hash, KeyPair, PublicKey,
-    HdNode, HD_RECEIVE, HD_VALIDATOR,
+    decode_address, encode_address, hash_data, Address, Hash, HdNode, KeyPair, PublicKey,
+    HD_RECEIVE, HD_VALIDATOR,
 };
 pub use rupeecoin_privacy::{
     EncryptedNote, Note, NoteCommitment, Nullifier, PrivacyKeyBundle, ShieldedTxBuilder,
 };
 pub use rupeecoin_types::{
-    Block, BlockHeader, OutPoint, Transaction, TxInput, TxOutput,
-    MAINNET_CHAIN_ID, TESTNET_CHAIN_ID, MICRO_RPC_PER_COIN,
+    Block, BlockHeader, OutPoint, Transaction, TxInput, TxOutput, MAINNET_CHAIN_ID,
+    MICRO_RPC_PER_COIN, TESTNET_CHAIN_ID,
 };

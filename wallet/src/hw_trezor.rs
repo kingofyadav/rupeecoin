@@ -14,7 +14,7 @@ use rupeecoin_crypto::Signature;
 // ── Trezor VID/PID ────────────────────────────────────────────────────────────
 
 const TREZOR_VID_SATOSHILABS: u16 = 0x534C; // Model One
-const TREZOR_VID_GENERIC: u16 = 0x1209;     // T / Safe 3 / Safe 5 (pid.codes shared VID)
+const TREZOR_VID_GENERIC: u16 = 0x1209; // T / Safe 3 / Safe 5 (pid.codes shared VID)
 const TREZOR_GENERIC_PIDS: &[u16] = &[0x53C1, 0x53C3, 0x53C5]; // T, Safe 3, Safe 5
 
 // ── ioctl to read raw HID device info ─────────────────────────────────────────
@@ -27,13 +27,15 @@ struct HidrawInfo {
 }
 
 // HIDIOCGRAWINFO on Linux x86_64
-const HIDIOCGRAWINFO: u64 = (2u64 << 30)
-    | (b'H' as u64) << 8
-    | 0x03u64
-    | (std::mem::size_of::<HidrawInfo>() as u64) << 16;
+const HIDIOCGRAWINFO: u64 =
+    (2u64 << 30) | (b'H' as u64) << 8 | 0x03u64 | (std::mem::size_of::<HidrawInfo>() as u64) << 16;
 
 fn get_hidraw_info(fd: i32) -> std::io::Result<HidrawInfo> {
-    let mut info = HidrawInfo { bus_type: 0, vendor: 0, product: 0 };
+    let mut info = HidrawInfo {
+        bus_type: 0,
+        vendor: 0,
+        product: 0,
+    };
     let ret = unsafe { ioctl_raw(fd, HIDIOCGRAWINFO, &mut info as *mut HidrawInfo as usize) };
     if ret < 0 {
         Err(std::io::Error::last_os_error())
@@ -121,7 +123,9 @@ fn trezor_read(dev: &mut File) -> Result<(u16, Vec<u8>), HwError> {
         .map_err(|e| HwError::Transport(format!("Trezor HID read: {e}")))?;
 
     if buf[0] != 0x3F || buf[1] != 0x23 || buf[2] != 0x23 {
-        return Err(HwError::Transport("Trezor: invalid response framing".into()));
+        return Err(HwError::Transport(
+            "Trezor: invalid response framing".into(),
+        ));
     }
 
     let msg_type = u16::from_be_bytes([buf[3], buf[4]]);
@@ -135,7 +139,9 @@ fn trezor_read(dev: &mut File) -> Result<(u16, Vec<u8>), HwError> {
         dev.read_exact(&mut buf)
             .map_err(|e| HwError::Transport(format!("Trezor HID read: {e}")))?;
         if buf[0] != 0x3F {
-            return Err(HwError::Transport("Trezor: invalid continuation packet".into()));
+            return Err(HwError::Transport(
+                "Trezor: invalid continuation packet".into(),
+            ));
         }
         let remaining = total_len - data.len();
         let take = (TREZOR_PACKET_SIZE - 1).min(remaining);

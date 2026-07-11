@@ -37,7 +37,10 @@ fn goldilocks_add(a: u64, b: u64) -> u64 {
 
 // Fermat's little theorem: a^(p-2) mod p.
 fn goldilocks_inv(a: u64) -> u64 {
-    debug_assert!(a != 0 && a < GOLDILOCKS_P, "goldilocks_inv: input must be in (0, P)");
+    debug_assert!(
+        a != 0 && a < GOLDILOCKS_P,
+        "goldilocks_inv: input must be in (0, P)"
+    );
     goldilocks_pow(a, GOLDILOCKS_P - 2)
 }
 
@@ -65,11 +68,11 @@ pub fn get_mds_matrix() -> &'static [[u64; 8]; 8] {
     static MDS: OnceLock<[[u64; 8]; 8]> = OnceLock::new();
     MDS.get_or_init(|| {
         let mut m = [[0u64; 8]; 8];
-        for i in 0..8usize {
-            for j in 0..8usize {
+        for (i, row) in m.iter_mut().enumerate() {
+            for (j, cell) in row.iter_mut().enumerate() {
                 // denom = (i - (j+8)) mod P = P - (j+8-i)
                 let denom = GOLDILOCKS_P - (j + 8 - i) as u64;
-                m[i][j] = goldilocks_inv(denom);
+                *cell = goldilocks_inv(denom);
             }
         }
         m
@@ -83,15 +86,19 @@ pub fn get_round_constants() -> &'static [[Felt; 8]; 7] {
     static RC: OnceLock<[[Felt; 8]; 7]> = OnceLock::new();
     RC.get_or_init(|| {
         let mut rc = [[Felt::ZERO; 8]; 7];
-        for r in 0..7usize {
-            for c in 0..8usize {
+        for (r, row) in rc.iter_mut().enumerate() {
+            for (c, cell) in row.iter_mut().enumerate() {
                 let msg = format!("rupeecoin-poseidon-rc-r{r}-c{c}");
                 let hash = blake3::hash(msg.as_bytes());
                 let bytes = hash.as_bytes();
                 let raw = u64::from_le_bytes(bytes[..8].try_into().unwrap());
                 // Reduce into [0, P): one subtraction suffices since raw < 2^64 < 2P.
-                let val = if raw >= GOLDILOCKS_P { raw - GOLDILOCKS_P } else { raw };
-                rc[r][c] = Felt::new(val);
+                let val = if raw >= GOLDILOCKS_P {
+                    raw - GOLDILOCKS_P
+                } else {
+                    raw
+                };
+                *cell = Felt::new(val);
             }
         }
         rc
@@ -125,7 +132,7 @@ pub fn poseidon_round(state: &mut [Felt], round: usize) {
 
     // Add round constants
     for (s, &r) in state[..8].iter_mut().zip(rc[round].iter()) {
-        *s = *s + r;
+        *s += r;
     }
 }
 
@@ -150,7 +157,11 @@ fn bytes_to_felt4(b: &[u8; 32]) -> [Felt; 4] {
     core::array::from_fn(|i| {
         let v = u64::from_le_bytes(b[i * 8..(i + 1) * 8].try_into().unwrap());
         // Inputs must be in [0, P); reduce by one subtraction if needed.
-        Felt::new(if v >= GOLDILOCKS_P { v - GOLDILOCKS_P } else { v })
+        Felt::new(if v >= GOLDILOCKS_P {
+            v - GOLDILOCKS_P
+        } else {
+            v
+        })
     })
 }
 
@@ -195,7 +206,7 @@ pub fn eval_poseidon_round<E: FieldElement<BaseField = Felt>>(
     for i in 0..8 {
         let mut mds_out = E::ZERO;
         for j in 0..8 {
-            mds_out = mds_out + E::from(Felt::new(mds[i][j])) * sbox[j];
+            mds_out += E::from(Felt::new(mds[i][j])) * sbox[j];
         }
         result[i] = sel * (next[i] - (mds_out + rc[i]));
     }

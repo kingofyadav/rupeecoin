@@ -8,7 +8,7 @@ use rupeecoin_privacy::{EncryptedNote, MerklePath, NoteCommitment, PrivacyTransa
 #[derive(Debug, Error)]
 pub enum RpcClientError {
     #[error("HTTP error: {0}")]
-    Http(#[from] ureq::Error),
+    Http(Box<ureq::Error>),
     #[error("JSON error: {0}")]
     Json(#[from] std::io::Error),
     #[error("hex decode: {0}")]
@@ -17,6 +17,12 @@ pub enum RpcClientError {
     Bincode(#[from] bincode::Error),
     #[error("invalid response: {0}")]
     Invalid(String),
+}
+
+impl From<ureq::Error> for RpcClientError {
+    fn from(e: ureq::Error) -> Self {
+        RpcClientError::Http(Box::new(e))
+    }
 }
 
 pub struct NodeRpc {
@@ -152,7 +158,10 @@ impl NodeRpc {
         struct Resp {
             claimable_rewards: u64,
         }
-        let url = format!("{}/rpc/validator_info?addr={}", self.base_url, payment_addr_hex);
+        let url = format!(
+            "{}/rpc/validator_info?addr={}",
+            self.base_url, payment_addr_hex
+        );
         let resp: Resp = ureq::get(&url).call()?.into_json()?;
         Ok(resp.claimable_rewards)
     }
@@ -169,10 +178,7 @@ impl NodeRpc {
     }
 
     /// Fetch unspent transparent UTXOs for a 20-byte address (hex).
-    pub fn get_utxos(
-        &self,
-        addr_hex: &str,
-    ) -> Result<Vec<UtxoEntry>, RpcClientError> {
+    pub fn get_utxos(&self, addr_hex: &str) -> Result<Vec<UtxoEntry>, RpcClientError> {
         let url = format!("{}/rpc/utxos?addr={}", self.base_url, addr_hex);
         let entries: Vec<UtxoEntry> = ureq::get(&url).call()?.into_json()?;
         Ok(entries)

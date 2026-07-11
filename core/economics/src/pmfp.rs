@@ -58,8 +58,7 @@ impl PmfpAccumulator {
         let active: Vec<Hash> = registry.active_set().to_vec();
         for addr in &active {
             let weight = registry.effective_weight(addr);
-            let share =
-                (emission as u128 * weight as u128 / total_weight as u128) as u64;
+            let share = (emission as u128 * weight as u128 / total_weight as u128) as u64;
             if share > 0 {
                 registry.credit_rewards(addr, share);
                 distributed = distributed.saturating_add(share);

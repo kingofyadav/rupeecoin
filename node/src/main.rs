@@ -11,20 +11,25 @@ use libp2p::{Multiaddr, PeerId};
 use tokio::time;
 use tracing::{error, info, warn};
 
-use rupeecoin_blockchain::{build_block, build_reward_claim, build_slash_report, genesis_block_with_timestamp, Chain, REORG_DEPTH};
-use std::collections::HashMap as StdHashMap;
+use rupeecoin_blockchain::ANCHOR_DEPTH;
+use rupeecoin_blockchain::{
+    build_block, build_reward_claim, build_slash_report, genesis_block_with_timestamp, Chain,
+    REORG_DEPTH,
+};
 use rupeecoin_consensus::{
     select_proposer, slot_to_epoch, CheckpointManager, ConsensusState, WeakSubjectivityCheckpoint,
-    SLOT_DURATION_SECS, SLOTS_PER_EPOCH,
+    SLOTS_PER_EPOCH, SLOT_DURATION_SECS,
 };
 use rupeecoin_crypto::{Hash, KeyPair, Signature};
 use rupeecoin_mempool::Mempool;
 use rupeecoin_network::{NetworkCommand, NetworkEvent};
-use rupeecoin_blockchain::ANCHOR_DEPTH;
 use rupeecoin_privacy::{PrivacyBlockApply, PrivacyTransaction};
 use rupeecoin_staking::{ValidatorRegistry, MIN_STAKE_MICRO_RPC};
 use rupeecoin_storage::ChainStore;
-use rupeecoin_types::{Attestation, Block, GenesisConfig, ValidatorAnnouncement, MICRO_RPC_PER_COIN};
+use rupeecoin_types::{
+    Attestation, Block, GenesisConfig, ValidatorAnnouncement, MICRO_RPC_PER_COIN,
+};
+use std::collections::HashMap as StdHashMap;
 
 // ── CLI ───────────────────────────────────────────────────────────────────────
 
@@ -87,14 +92,19 @@ fn parse_args() -> Result<Config> {
                 stake_rpc = args.next().context("--stake requires a value")?.parse()?;
             }
             "--rpc-port" => {
-                rpc_port = args.next().context("--rpc-port requires a value")?.parse()?;
+                rpc_port = args
+                    .next()
+                    .context("--rpc-port requires a value")?
+                    .parse()?;
             }
             "--no-rpc" => {
                 rpc_port = 0;
             }
             "--checkpoint" => {
                 // Format: height:block_hash_hex:state_root_hex
-                let val = args.next().context("--checkpoint requires height:hash:state_root")?;
+                let val = args
+                    .next()
+                    .context("--checkpoint requires height:hash:state_root")?;
                 let parts: Vec<&str> = val.splitn(3, ':').collect();
                 anyhow::ensure!(
                     parts.len() == 3,
@@ -116,27 +126,29 @@ fn parse_args() -> Result<Config> {
                 });
             }
             "--validator-seed" => {
-                let hex_val = args.next().context("--validator-seed requires a 64-char hex value")?;
+                let hex_val = args
+                    .next()
+                    .context("--validator-seed requires a 64-char hex value")?;
                 let raw = hex::decode(&hex_val).context("--validator-seed must be valid hex")?;
-                validator_seed = Some(
-                    raw.try_into()
-                        .map_err(|_| anyhow::anyhow!("--validator-seed must be exactly 32 bytes (64 hex chars)"))?,
-                );
+                validator_seed = Some(raw.try_into().map_err(|_| {
+                    anyhow::anyhow!("--validator-seed must be exactly 32 bytes (64 hex chars)")
+                })?);
             }
             "--tor-socks" => {
                 let addr = args.next().context("--tor-socks requires host:port")?;
-                tor_config = Some(
-                    tor::TorConfig::parse(&addr)
-                        .map_err(|e| anyhow::anyhow!("{e}"))?,
-                );
+                tor_config =
+                    Some(tor::TorConfig::parse(&addr).map_err(|e| anyhow::anyhow!("{e}"))?);
             }
             "--genesis-config" => {
-                let path = args.next().context("--genesis-config requires a file path")?;
+                let path = args
+                    .next()
+                    .context("--genesis-config requires a file path")?;
                 let json = std::fs::read_to_string(&path)
                     .with_context(|| format!("reading genesis config from '{path}'"))?;
                 let cfg = GenesisConfig::from_json(&json)
                     .with_context(|| format!("parsing genesis config from '{path}'"))?;
-                cfg.validate().map_err(|e| anyhow::anyhow!("invalid genesis config: {e}"))?;
+                cfg.validate()
+                    .map_err(|e| anyhow::anyhow!("invalid genesis config: {e}"))?;
                 genesis_config = Some(cfg);
             }
             "--genesis-timestamp" => {
@@ -146,7 +158,9 @@ fn parse_args() -> Result<Config> {
                     .parse()?;
             }
             "--peer-allowlist" => {
-                let path = args.next().context("--peer-allowlist requires a file path")?;
+                let path = args
+                    .next()
+                    .context("--peer-allowlist requires a file path")?;
                 let content = std::fs::read_to_string(&path)
                     .with_context(|| format!("reading peer allowlist from '{path}'"))?;
                 let mut set = HashSet::new();
@@ -155,7 +169,8 @@ fn parse_args() -> Result<Config> {
                     if line.is_empty() || line.starts_with('#') {
                         continue;
                     }
-                    let peer = line.parse::<PeerId>()
+                    let peer = line
+                        .parse::<PeerId>()
                         .with_context(|| format!("invalid PeerId in allowlist: '{line}'"))?;
                     set.insert(peer);
                 }
@@ -163,12 +178,13 @@ fn parse_args() -> Result<Config> {
                 peer_allowlist = Some(set);
             }
             "--treasury-address" => {
-                let hex_addr = args.next().context("--treasury-address requires a 40-char hex address")?;
-                let raw = hex::decode(&hex_addr)
-                    .context("--treasury-address must be valid hex")?;
-                let arr: [u8; 20] = raw
-                    .try_into()
-                    .map_err(|_| anyhow::anyhow!("--treasury-address must be exactly 20 bytes (40 hex chars)"))?;
+                let hex_addr = args
+                    .next()
+                    .context("--treasury-address requires a 40-char hex address")?;
+                let raw = hex::decode(&hex_addr).context("--treasury-address must be valid hex")?;
+                let arr: [u8; 20] = raw.try_into().map_err(|_| {
+                    anyhow::anyhow!("--treasury-address must be exactly 20 bytes (40 hex chars)")
+                })?;
                 rupeecoin_economics::set_treasury_address(rupeecoin_crypto::Address(arr));
             }
             "--help" | "-h" => {
@@ -227,12 +243,13 @@ fn load_or_create_chain(
     checkpoint_mgr: &CheckpointManager,
     genesis_timestamp: u64,
 ) -> Result<Chain> {
-
     match store.get_tip().context("reading chain tip from store")? {
         None => {
             info!("No existing chain — creating genesis block");
             let genesis = genesis_block_with_timestamp(genesis_timestamp);
-            store.apply_block(&genesis).context("storing genesis block")?;
+            store
+                .apply_block(&genesis)
+                .context("storing genesis block")?;
             Ok(Chain::new(genesis))
         }
         Some((_, tip_height)) => {
@@ -275,7 +292,10 @@ fn load_or_create_chain(
                     // manipulated UTXO set cannot pass checkpoint validation.
                     if h == checkpoint_height {
                         if let Some(expected_sr) = checkpoint_state_root {
-                            let actual_sr = chain.utxo_set.state_root().expect("UTXO serialization failed");
+                            let actual_sr = chain
+                                .utxo_set
+                                .state_root()
+                                .expect("UTXO serialization failed");
                             anyhow::ensure!(
                                 actual_sr == expected_sr,
                                 "checkpoint state_root mismatch at height {h}: \
@@ -285,7 +305,8 @@ fn load_or_create_chain(
                     }
 
                     // Update privacy fields (finding #4).
-                    let apply = PrivacyBlockApply::compute(&block.privacy_txs, &chain.commitment_tree, h);
+                    let apply =
+                        PrivacyBlockApply::compute(&block.privacy_txs, &chain.commitment_tree, h);
                     for cm in &apply.new_commitments {
                         chain.commitment_tree.append(*cm);
                     }
@@ -389,7 +410,9 @@ fn persist_contract_storage(store: &ChainStore, block: &rupeecoin_types::Block, 
     use rupeecoin_rvm::{run, ExecContext, ExecResult};
     use rupeecoin_types::contract::{ContractCall, ContractDeploy};
     for tx in &block.transactions {
-        let Some(ref data) = tx.coinbase_data else { continue };
+        let Some(ref data) = tx.coinbase_data else {
+            continue;
+        };
         if let Some(deploy) = ContractDeploy::decode(data) {
             let ctx = ExecContext {
                 caller: 0,
@@ -397,14 +420,19 @@ fn persist_contract_storage(store: &ChainStore, block: &rupeecoin_types::Block, 
                 block_height: height,
                 timestamp: block.header.timestamp,
                 chain_id: 1,
-                self_addr: tx.txid().as_bytes()[..8].try_into().map(u64::from_le_bytes).unwrap_or(0),
+                self_addr: tx.txid().as_bytes()[..8]
+                    .try_into()
+                    .map(u64::from_le_bytes)
+                    .unwrap_or(0),
                 gas_limit: deploy.gas_limit,
                 calldata: deploy.constructor_args,
             };
             let contract_addr = ctx.self_addr;
             match store.load_contract_storage(contract_addr) {
                 Ok(storage) => {
-                    if let Ok((ExecResult::Return { .. }, Some(new_storage))) = run(&deploy.bytecode, storage, ctx) {
+                    if let Ok((ExecResult::Return { .. }, Some(new_storage))) =
+                        run(&deploy.bytecode, storage, ctx)
+                    {
                         if let Err(e) = store.save_contract_storage(contract_addr, &new_storage) {
                             error!("persist contract storage (deploy) addr={contract_addr}: {e}");
                         }
@@ -417,29 +445,40 @@ fn persist_contract_storage(store: &ChainStore, block: &rupeecoin_types::Block, 
             }
         } else if let Some(call) = ContractCall::decode(data) {
             match store.load_contract_code(call.contract_addr) {
-                Ok(Some(bytecode)) => {
-                    match store.load_contract_storage(call.contract_addr) {
-                        Ok(storage) => {
-                            let ctx = ExecContext {
-                                caller: 0,
-                                call_value: call.value,
-                                block_height: height,
-                                timestamp: block.header.timestamp,
-                                chain_id: 1,
-                                self_addr: call.contract_addr,
-                                gas_limit: call.gas_limit,
-                                calldata: call.calldata,
-                            };
-                            if let Ok((ExecResult::Return { .. }, Some(new_storage))) = run(&bytecode, storage, ctx) {
-                                if let Err(e) = store.save_contract_storage(call.contract_addr, &new_storage) {
-                                    error!("persist contract storage (call) addr={}: {e}", call.contract_addr);
-                                }
+                Ok(Some(bytecode)) => match store.load_contract_storage(call.contract_addr) {
+                    Ok(storage) => {
+                        let ctx = ExecContext {
+                            caller: 0,
+                            call_value: call.value,
+                            block_height: height,
+                            timestamp: block.header.timestamp,
+                            chain_id: 1,
+                            self_addr: call.contract_addr,
+                            gas_limit: call.gas_limit,
+                            calldata: call.calldata,
+                        };
+                        if let Ok((ExecResult::Return { .. }, Some(new_storage))) =
+                            run(&bytecode, storage, ctx)
+                        {
+                            if let Err(e) =
+                                store.save_contract_storage(call.contract_addr, &new_storage)
+                            {
+                                error!(
+                                    "persist contract storage (call) addr={}: {e}",
+                                    call.contract_addr
+                                );
                             }
                         }
-                        Err(e) => error!("load contract storage (call) addr={}: {e}", call.contract_addr),
                     }
-                }
-                Ok(None) => warn!("RVM call to {}: contract not deployed on this node", call.contract_addr),
+                    Err(e) => error!(
+                        "load contract storage (call) addr={}: {e}",
+                        call.contract_addr
+                    ),
+                },
+                Ok(None) => warn!(
+                    "RVM call to {}: contract not deployed on this node",
+                    call.contract_addr
+                ),
                 Err(e) => error!("load contract code (call) addr={}: {e}", call.contract_addr),
             }
         }
@@ -468,7 +507,10 @@ fn maybe_save_checkpoint(store: &ChainStore, chain: &Chain) {
         if let Err(e) = store.save_checkpoint(&cp) {
             error!("Failed to save checkpoint at height {h}: {e}");
         } else {
-            info!("Saved weak-subjectivity checkpoint at height {h}  hash={}", cp.block_hash);
+            info!(
+                "Saved weak-subjectivity checkpoint at height {h}  hash={}",
+                cp.block_hash
+            );
         }
     }
 }
@@ -528,7 +570,10 @@ fn try_reorg(
     let applied = fork_blocks_ordered.len();
     chain.apply_fork(fork_blocks_ordered, registry).ok()?;
 
-    Some(ReorgResult { rolled_back, applied })
+    Some(ReorgResult {
+        rolled_back,
+        applied,
+    })
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────────
@@ -538,7 +583,9 @@ async fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-                "rupeecoin_node=info,rupeecoin_network=info".parse().unwrap()
+                "rupeecoin_node=info,rupeecoin_network=info"
+                    .parse()
+                    .unwrap()
             }),
         )
         .init();
@@ -580,7 +627,10 @@ async fn main() -> Result<()> {
     let my_addr = kp.public_key.to_hash();
     let my_transparent_addr = kp.public_key.to_address();
     info!("Validator address (registry): {my_addr}");
-    info!("Validator address (UTXO/transparent): {}", rupeecoin_crypto::encode_address(&my_transparent_addr));
+    info!(
+        "Validator address (UTXO/transparent): {}",
+        rupeecoin_crypto::encode_address(&my_transparent_addr)
+    );
 
     let store = Arc::new(store);
     let mut chain = load_or_create_chain(&store, &checkpoint_mgr, cfg.genesis_timestamp)?;
@@ -626,8 +676,7 @@ async fn main() -> Result<()> {
     // Fork blocks cache: blocks on competing forks, keyed by block hash.
     // Used by the LMD-GHOST reorg logic to find fork chain paths.
     let mut fork_blocks: StdHashMap<Hash, rupeecoin_types::Block> = StdHashMap::new();
-    let pending_privacy_txs: Arc<Mutex<Vec<PrivacyTransaction>>> =
-        Arc::new(Mutex::new(Vec::new()));
+    let pending_privacy_txs: Arc<Mutex<Vec<PrivacyTransaction>>> = Arc::new(Mutex::new(Vec::new()));
     let pending_txs: Arc<Mutex<Vec<rupeecoin_types::Transaction>>> =
         Arc::new(Mutex::new(Vec::new()));
 
@@ -680,7 +729,8 @@ async fn main() -> Result<()> {
     info!("Starting P2P network on {}", cfg.listen);
     let tor_proxy = cfg.tor.as_ref().map(|t| t.proxy_addr);
     let (net_cmd, mut net_event) =
-        rupeecoin_network::start(cfg.listen, tor_proxy, cfg.peer_allowlist).context("starting network")?;
+        rupeecoin_network::start(cfg.listen, tor_proxy, cfg.peer_allowlist)
+            .context("starting network")?;
 
     for addr in cfg.peers {
         info!("Dialing seed peer {addr}");
@@ -710,7 +760,9 @@ async fn main() -> Result<()> {
             signature: kp.sign(sig_data.as_bytes()),
         };
         let _ = net_cmd
-            .send(NetworkCommand::BroadcastValidatorAnnouncement(Box::new(ann)))
+            .send(NetworkCommand::BroadcastValidatorAnnouncement(Box::new(
+                ann,
+            )))
             .await;
     } else if cfg.stake_micro_rpc > 0 {
         warn!(
@@ -912,7 +964,7 @@ async fn main() -> Result<()> {
                     if !pending_sync_heights.contains(&from) {
                         pending_sync_heights.insert(from);
                         let _ = net_cmd
-                            .send(NetworkCommand::RequestBlocks { peer: peer.clone(), from_height: from })
+                            .send(NetworkCommand::RequestBlocks { peer, from_height: from })
                             .await;
                     }
                     if is_validator {
@@ -977,7 +1029,9 @@ async fn main() -> Result<()> {
             // ── Slot timer ────────────────────────────────────────────────────────
             _ = slot_timer.tick() => {
                 // Drain HTTP-submitted transparent txs into the mempool.
-                for tx in pending_txs.lock().unwrap().drain(..) {
+                // Collect first so the lock is not held across the broadcast await.
+                let drained: Vec<_> = std::mem::take(&mut *pending_txs.lock().unwrap());
+                for tx in drained {
                     if let Err(e) = mempool.add(tx.clone(), &chain.utxo_set, chain.height()) {
                         use rupeecoin_mempool::MempoolError;
                         if !matches!(e, MempoolError::Duplicate) {
@@ -1016,7 +1070,7 @@ async fn main() -> Result<()> {
                     continue;
                 }
 
-                let atts: Vec<Attestation> = pending_attestations.drain(..).collect();
+                let atts: Vec<Attestation> = std::mem::take(&mut pending_attestations);
                 // Only include transfers that pay at least the next block's base
                 // fee, matching the chain's fee floor so we never build a block
                 // our own validation would reject.

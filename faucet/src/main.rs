@@ -82,17 +82,12 @@ fn load_or_create_keyfile(path: &Path) -> Result<([u8; 32], u64)> {
     if path.exists() {
         let text = std::fs::read_to_string(path)
             .with_context(|| format!("reading keyfile {}", path.display()))?;
-        let kf: Keyfile =
-            serde_json::from_str(&text).context("parsing keyfile JSON")?;
+        let kf: Keyfile = serde_json::from_str(&text).context("parsing keyfile JSON")?;
         let raw = hex::decode(&kf.seed_hex).context("invalid seed_hex in keyfile")?;
         let seed: [u8; 32] = raw
             .try_into()
             .map_err(|_| anyhow!("seed must be exactly 32 bytes"))?;
-        info!(
-            "Loaded keyfile {} (nonce={})",
-            path.display(),
-            kf.nonce
-        );
+        info!("Loaded keyfile {} (nonce={})", path.display(), kf.nonce);
         Ok((seed, kf.nonce))
     } else {
         let mut seed = [0u8; 32];
@@ -183,6 +178,7 @@ fn node_submit_tx(node_rpc: &str, tx_hex: &str) -> Result<()> {
 
 // ── Transaction builder ───────────────────────────────────────────────────────
 
+#[allow(clippy::too_many_arguments)]
 fn build_drip_tx(
     seed: &[u8; 32],
     utxos: &[UtxoItem],
@@ -205,14 +201,13 @@ fn build_drip_tx(
             break;
         }
         selected.push(utxo);
-        total_in = total_in.checked_add(utxo.amount_micro)
+        total_in = total_in
+            .checked_add(utxo.amount_micro)
             .ok_or_else(|| anyhow!("faucet balance overflow during coin selection"))?;
     }
 
     if total_in < needed {
-        bail!(
-            "insufficient faucet balance: have {total_in} µRPC, need {needed} µRPC (drip + fee)"
-        );
+        bail!("insufficient faucet balance: have {total_in} µRPC, need {needed} µRPC (drip + fee)");
     }
 
     let change = total_in - drip_amount - fee;
@@ -349,7 +344,10 @@ async fn handler_drip(
             let elapsed = now.saturating_sub(last);
             if elapsed < f.config.cooldown_secs {
                 let retry_in = f.config.cooldown_secs - elapsed;
-                warn!("Rate limit for address {}: retry in {retry_in}s", req.address);
+                warn!(
+                    "Rate limit for address {}: retry in {retry_in}s",
+                    req.address
+                );
                 return (
                     StatusCode::TOO_MANY_REQUESTS,
                     Json(DripResponse {
@@ -371,33 +369,32 @@ async fn handler_drip(
     // Fetch the faucet's current UTXOs from the node (blocking I/O in threadpool).
     let node_rpc = f.config.node_rpc.clone();
     let addr_hex = f.config.address_hex.clone();
-    let utxos = match tokio::task::spawn_blocking(move || node_fetch_utxos(&node_rpc, &addr_hex))
-        .await
-    {
-        Ok(Ok(u)) => u,
-        Ok(Err(e)) => {
-            error!("Fetch UTXOs: {e}");
-            return (
-                StatusCode::BAD_GATEWAY,
-                Json(DripResponse {
-                    txid: None,
-                    error: Some(format!("Node unreachable: {e}")),
-                    retry_after_secs: None,
-                }),
-            );
-        }
-        Err(e) => {
-            error!("spawn_blocking panicked: {e}");
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(DripResponse {
-                    txid: None,
-                    error: Some("Internal error".into()),
-                    retry_after_secs: None,
-                }),
-            );
-        }
-    };
+    let utxos =
+        match tokio::task::spawn_blocking(move || node_fetch_utxos(&node_rpc, &addr_hex)).await {
+            Ok(Ok(u)) => u,
+            Ok(Err(e)) => {
+                error!("Fetch UTXOs: {e}");
+                return (
+                    StatusCode::BAD_GATEWAY,
+                    Json(DripResponse {
+                        txid: None,
+                        error: Some(format!("Node unreachable: {e}")),
+                        retry_after_secs: None,
+                    }),
+                );
+            }
+            Err(e) => {
+                error!("spawn_blocking panicked: {e}");
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(DripResponse {
+                        txid: None,
+                        error: Some("Internal error".into()),
+                        retry_after_secs: None,
+                    }),
+                );
+            }
+        };
 
     // Build and sign the drip transaction.
     let tx = match build_drip_tx(
@@ -443,10 +440,9 @@ async fn handler_drip(
     // Submit to the node.
     let node_rpc2 = f.config.node_rpc.clone();
     let tx_hex_clone = tx_hex.clone();
-    if let Err(e) =
-        tokio::task::spawn_blocking(move || node_submit_tx(&node_rpc2, &tx_hex_clone))
-            .await
-            .unwrap_or_else(|e| Err(anyhow!("spawn_blocking panic: {e}")))
+    if let Err(e) = tokio::task::spawn_blocking(move || node_submit_tx(&node_rpc2, &tx_hex_clone))
+        .await
+        .unwrap_or_else(|e| Err(anyhow!("spawn_blocking panic: {e}")))
     {
         error!("Submit tx: {e}");
         return (
@@ -506,13 +502,12 @@ struct StatsResponse {
 async fn handler_stats(State(f): State<SharedFaucet>) -> impl IntoResponse {
     let node_rpc = f.config.node_rpc.clone();
     let addr_hex = f.config.address_hex.clone();
-    let balance_micro =
-        tokio::task::spawn_blocking(move || node_fetch_utxos(&node_rpc, &addr_hex))
-            .await
-            .ok()
-            .and_then(|r| r.ok())
-            .map(|u| u.iter().map(|x| x.amount_micro).sum::<u64>())
-            .unwrap_or(0);
+    let balance_micro = tokio::task::spawn_blocking(move || node_fetch_utxos(&node_rpc, &addr_hex))
+        .await
+        .ok()
+        .and_then(|r| r.ok())
+        .map(|u| u.iter().map(|x| x.amount_micro).sum::<u64>())
+        .unwrap_or(0);
 
     let total_drips = f.mutable.lock().await.total_drips;
 

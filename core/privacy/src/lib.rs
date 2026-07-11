@@ -131,7 +131,10 @@ mod tests {
         let enc = EncryptedNote::encrypt(&note, &bob.view_key.public);
         let mut out = ShieldedOutput::new(cm, enc, 1);
         out.value = 0; // Force zero value
-        assert!(matches!(out.validate(), Err(PrivacyTxError::InvalidOutputValue(_))));
+        assert!(matches!(
+            out.validate(),
+            Err(PrivacyTxError::InvalidOutputValue(_))
+        ));
     }
 
     #[test]
@@ -142,7 +145,10 @@ mod tests {
         let enc = EncryptedNote::encrypt(&note, &bob.view_key.public);
         let mut out = ShieldedOutput::new(cm, enc, 1);
         out.value = MAX_NOTE_VALUE + 1;
-        assert!(matches!(out.validate(), Err(PrivacyTxError::InvalidOutputValue(_))));
+        assert!(matches!(
+            out.validate(),
+            Err(PrivacyTxError::InvalidOutputValue(_))
+        ));
     }
 
     #[test]
@@ -153,7 +159,10 @@ mod tests {
         let enc = EncryptedNote::encrypt(&note, &bob.view_key.public);
         let mut out = ShieldedOutput::new(cm, enc, 1_000);
         out.encrypted_note.ciphertext.truncate(10);
-        assert!(matches!(out.validate(), Err(PrivacyTxError::MalformedEncryptedNote)));
+        assert!(matches!(
+            out.validate(),
+            Err(PrivacyTxError::MalformedEncryptedNote)
+        ));
     }
 
     #[test]
@@ -176,10 +185,18 @@ mod tests {
         let path = tree.auth_path(idx).unwrap();
 
         let nullifier = input_note.nullifier(&alice.nullifier_key);
-        let spend_proof = SpendProof { note_commitment: cm, merkle_path: path, anchor };
+        let spend_proof = SpendProof {
+            note_commitment: cm,
+            merkle_path: path,
+            anchor,
+        };
 
         // Create two outputs with identical commitment (same note, same rcm)
-        let output_note = Note { value: 9_900_000, recipient: bob.payment_address.clone(), rcm: [7u8; 32] };
+        let output_note = Note {
+            value: 9_900_000,
+            recipient: bob.payment_address.clone(),
+            rcm: [7u8; 32],
+        };
         let out_cm = output_note.commitment();
         let enc1 = EncryptedNote::encrypt(&output_note, &bob.view_key.public);
         let enc2 = EncryptedNote::encrypt(&output_note, &bob.view_key.public);
