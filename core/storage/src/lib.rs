@@ -71,7 +71,10 @@ impl ChainStore {
         .map(|name| ColumnFamilyDescriptor::new(name, Options::default()));
 
         let db = DB::open_cf_descriptors(&opts, path, cfs)?;
-        Ok(ChainStore { db: Arc::new(db), write_lock: Arc::new(Mutex::new(())) })
+        Ok(ChainStore {
+            db: Arc::new(db),
+            write_lock: Arc::new(Mutex::new(())),
+        })
     }
 
     /// Open the store in read-only mode — safe to use concurrently with a running node.
@@ -92,14 +95,20 @@ impl ChainStore {
             CF_ADDRESS_INDEX,
         ];
         let db = DB::open_cf_for_read_only(&opts, path, cf_names, false)?;
-        Ok(ChainStore { db: Arc::new(db), write_lock: Arc::new(Mutex::new(())) })
+        Ok(ChainStore {
+            db: Arc::new(db),
+            write_lock: Arc::new(Mutex::new(())),
+        })
     }
 
     /// Open the store as a RocksDB secondary instance.  `secondary_path` is a
     /// scratch directory (may not exist yet) used for WAL replay.  Call
     /// `try_catch_up_with_primary()` periodically to pick up new data from the
     /// running node without restarting.
-    pub fn open_secondary(primary_path: &Path, secondary_path: &Path) -> Result<Self, StorageError> {
+    pub fn open_secondary(
+        primary_path: &Path,
+        secondary_path: &Path,
+    ) -> Result<Self, StorageError> {
         let opts = Options::default();
         let cf_names = [
             CF_BLOCKS,
@@ -116,7 +125,10 @@ impl ChainStore {
         ];
         std::fs::create_dir_all(secondary_path).ok();
         let db = DB::open_cf_as_secondary(&opts, primary_path, secondary_path, cf_names)?;
-        Ok(ChainStore { db: Arc::new(db), write_lock: Arc::new(Mutex::new(())) })
+        Ok(ChainStore {
+            db: Arc::new(db),
+            write_lock: Arc::new(Mutex::new(())),
+        })
     }
 
     /// Pull the latest data from the primary node (no-op when opened normally).
@@ -382,17 +394,19 @@ impl ChainStore {
         let prefix = contract_addr.to_be_bytes();
         let mut map = std::collections::HashMap::new();
         // Iterate from the first key with this prefix.
-        for item in self.db.iterator_cf(cf, IteratorMode::From(&prefix, rocksdb::Direction::Forward)) {
+        for item in self
+            .db
+            .iterator_cf(cf, IteratorMode::From(&prefix, rocksdb::Direction::Forward))
+        {
             let (k, v) = item?;
             if k.len() != 16 || k[..8] != prefix {
                 break; // past this contract's keys
             }
             let slot = u64::from_be_bytes(k[8..16].try_into().unwrap());
-            let val = u64::from_be_bytes(
-                v.as_ref()
-                    .try_into()
-                    .map_err(|_| StorageError::Corruption("contract storage value corrupt".into()))?,
-            );
+            let val =
+                u64::from_be_bytes(v.as_ref().try_into().map_err(|_| {
+                    StorageError::Corruption("contract storage value corrupt".into())
+                })?);
             map.insert(slot, val);
         }
         Ok(map)
@@ -417,7 +431,11 @@ impl ChainStore {
     // ── RVM contract bytecode (CF_CONTRACT_CODE) ─────────────────────────────
 
     /// Persist the bytecode of a deployed contract.  Key = addr as 8-byte BE.
-    pub fn save_contract_code(&self, contract_addr: u64, bytecode: &[u8]) -> Result<(), StorageError> {
+    pub fn save_contract_code(
+        &self,
+        contract_addr: u64,
+        bytecode: &[u8],
+    ) -> Result<(), StorageError> {
         let key = contract_addr.to_be_bytes();
         self.db.put_cf(self.cf(CF_CONTRACT_CODE)?, &key, bytecode)?;
         Ok(())

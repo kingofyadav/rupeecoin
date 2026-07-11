@@ -1,10 +1,10 @@
+pub mod rpc1155;
 pub mod rpc20;
 pub mod rpc721;
-pub mod rpc1155;
 
+pub use rpc1155::rpc1155_bytecode;
 pub use rpc20::rpc20_bytecode;
 pub use rpc721::rpc721_bytecode;
-pub use rpc1155::rpc1155_bytecode;
 
 // ── Calling convention ────────────────────────────────────────────────────────
 //
@@ -39,9 +39,8 @@ pub fn balance_slot(addr: u64) -> u64 {
 
 /// Allowance storage key: XOR-mix of owner and spender into namespace 2.
 pub fn allowance_slot(owner: u64, spender: u64) -> u64 {
-    let mixed = owner
-        .wrapping_mul(0x517c_c1b7_2722_0a95)
-        ^ spender.wrapping_mul(0x9e37_79b9_7f4a_7c15);
+    let mixed =
+        owner.wrapping_mul(0x517c_c1b7_2722_0a95) ^ spender.wrapping_mul(0x9e37_79b9_7f4a_7c15);
     0x0002_0000_0000_0000u64.wrapping_add(mixed)
 }
 
@@ -52,8 +51,7 @@ pub fn owner_slot(token_id: u64) -> u64 {
 
 /// RPC-1155 balance slot: (account, token_id) pair.
 pub fn multi_balance_slot(account: u64, token_id: u64) -> u64 {
-    let mixed = account
-        .wrapping_mul(0x517c_c1b7_2722_0a95)
-        ^ token_id.wrapping_mul(0x9e37_79b9_7f4a_7c15);
+    let mixed =
+        account.wrapping_mul(0x517c_c1b7_2722_0a95) ^ token_id.wrapping_mul(0x9e37_79b9_7f4a_7c15);
     0x0004_0000_0000_0000u64.wrapping_add(mixed)
 }

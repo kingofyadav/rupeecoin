@@ -19,7 +19,8 @@ fn make_keypair() -> KeyPair {
 
 fn make_registry_with_validator(kp: &KeyPair, stake: u64) -> ValidatorRegistry {
     let mut reg = ValidatorRegistry::new();
-    reg.register(kp.public_key.clone(), stake, 0).expect("registration should succeed");
+    reg.register(kp.public_key.clone(), stake, 0)
+        .expect("registration should succeed");
     reg
 }
 
@@ -30,7 +31,10 @@ fn genesis_block_is_valid() {
     let genesis = genesis_block();
     assert_eq!(genesis.header.height, 0);
     assert_eq!(genesis.header.prev_hash, Hash::zero());
-    assert!(!genesis.transactions.is_empty(), "genesis must have coinbase");
+    assert!(
+        !genesis.transactions.is_empty(),
+        "genesis must have coinbase"
+    );
     assert!(genesis.transactions[0].is_coinbase());
 }
 
@@ -48,7 +52,9 @@ fn build_and_add_block_increments_height() {
     let mut chain = Chain::new(genesis_block());
 
     let block = build_block(&chain, &kp, &registry, vec![], vec![], vec![]);
-    chain.add_block(block, &mut registry).expect("first block should be valid");
+    chain
+        .add_block(block, &mut registry)
+        .expect("first block should be valid");
     assert_eq!(chain.height(), 1);
 }
 
@@ -60,7 +66,9 @@ fn multiple_blocks_advance_chain() {
 
     for expected_height in 1u64..=5 {
         let block = build_block(&chain, &kp, &registry, vec![], vec![], vec![]);
-        chain.add_block(block, &mut registry).expect("block should be valid");
+        chain
+            .add_block(block, &mut registry)
+            .expect("block should be valid");
         assert_eq!(chain.height(), expected_height);
     }
 }
@@ -106,10 +114,17 @@ fn state_root_is_committed_in_header() {
 
     // State root = BLAKE3(utxo_root || commitment_tree_root) — verifies both
     // transparent and shielded pool state are committed in the block header.
-    let utxo_root = chain.utxo_set.state_root().expect("UTXO serialization failed");
+    let utxo_root = chain
+        .utxo_set
+        .state_root()
+        .expect("UTXO serialization failed");
     let privacy_root = chain.commitment_tree.root();
     let combined = rupeecoin_crypto::hash_data(
-        &[utxo_root.as_bytes().as_slice(), privacy_root.as_bytes().as_slice()].concat(),
+        &[
+            utxo_root.as_bytes().as_slice(),
+            privacy_root.as_bytes().as_slice(),
+        ]
+        .concat(),
     );
     assert_eq!(combined, claimed);
 }
@@ -174,8 +189,12 @@ fn mempool_rejects_coinbase() {
 #[test]
 fn checkpoint_should_checkpoint_at_interval() {
     assert!(CheckpointManager::should_checkpoint(CHECKPOINT_INTERVAL));
-    assert!(!CheckpointManager::should_checkpoint(CHECKPOINT_INTERVAL - 1));
-    assert!(CheckpointManager::should_checkpoint(2 * CHECKPOINT_INTERVAL));
+    assert!(!CheckpointManager::should_checkpoint(
+        CHECKPOINT_INTERVAL - 1
+    ));
+    assert!(CheckpointManager::should_checkpoint(
+        2 * CHECKPOINT_INTERVAL
+    ));
 }
 
 // ── Economics ─────────────────────────────────────────────────────────────────
@@ -211,7 +230,10 @@ fn commitment_tree_grows_with_notes() {
     tree.append(note.commitment());
     let after_root = tree.root();
 
-    assert_ne!(initial_root, after_root, "tree root must change after appending a commitment");
+    assert_ne!(
+        initial_root, after_root,
+        "tree root must change after appending a commitment"
+    );
     assert_eq!(tree.len(), 1);
 }
 
@@ -263,7 +285,12 @@ fn signed_reward_claim_to_own_address_is_accepted() {
     registry.credit_rewards(&addr, 5 * MICRO_RPC_PER_COIN);
     let mut chain = Chain::new(genesis_block());
 
-    let claim = build_reward_claim(addr, 5 * MICRO_RPC_PER_COIN, kp.public_key.to_address(), &kp);
+    let claim = build_reward_claim(
+        addr,
+        5 * MICRO_RPC_PER_COIN,
+        kp.public_key.to_address(),
+        &kp,
+    );
     let block = build_block(&chain, &kp, &registry, vec![], vec![claim], vec![]);
     chain
         .add_block(block, &mut registry)
@@ -281,8 +308,12 @@ fn reward_claim_redirected_to_attacker_is_rejected() {
 
     // Take a legitimately signed claim and tamper the payout recipient. The
     // signature covers the outputs, so verification must now fail.
-    let mut forged =
-        build_reward_claim(addr, 5 * MICRO_RPC_PER_COIN, kp.public_key.to_address(), &kp);
+    let mut forged = build_reward_claim(
+        addr,
+        5 * MICRO_RPC_PER_COIN,
+        kp.public_key.to_address(),
+        &kp,
+    );
     forged.outputs[0].recipient = attacker.public_key.to_address();
     let block = build_block(&chain, &kp, &registry, vec![], vec![forged], vec![]);
     assert!(
@@ -325,8 +356,18 @@ fn double_reward_claim_in_same_block_is_rejected() {
 
     // Two valid signed claims for the full balance; cumulative payout (10) would
     // exceed the 5 available, so the block must be rejected.
-    let c1 = build_reward_claim(addr, 5 * MICRO_RPC_PER_COIN, kp.public_key.to_address(), &kp);
-    let c2 = build_reward_claim(addr, 5 * MICRO_RPC_PER_COIN, kp.public_key.to_address(), &kp);
+    let c1 = build_reward_claim(
+        addr,
+        5 * MICRO_RPC_PER_COIN,
+        kp.public_key.to_address(),
+        &kp,
+    );
+    let c2 = build_reward_claim(
+        addr,
+        5 * MICRO_RPC_PER_COIN,
+        kp.public_key.to_address(),
+        &kp,
+    );
     let block = build_block(&chain, &kp, &registry, vec![], vec![c1, c2], vec![]);
     assert!(
         chain.add_block(block, &mut registry).is_err(),
@@ -352,10 +393,15 @@ fn replay_reconstructs_state_without_registry() {
     for _ in 0..6 {
         let block = build_block(&chain, &kp, &registry, vec![], vec![], vec![]);
         stored.push(block.clone());
-        chain.add_block(block, &mut registry).expect("production block should be valid");
+        chain
+            .add_block(block, &mut registry)
+            .expect("production block should be valid");
     }
     let expected_height = chain.height();
-    let expected_utxo_root = chain.utxo_set.state_root().expect("UTXO serialization failed");
+    let expected_utxo_root = chain
+        .utxo_set
+        .state_root()
+        .expect("UTXO serialization failed");
     let expected_privacy_root = chain.commitment_tree.root();
 
     // Restart: fresh chain, no registry available, replay the stored blocks.
@@ -366,9 +412,16 @@ fn replay_reconstructs_state_without_registry() {
             .expect("replay of a persisted, previously-validated block must succeed");
     }
 
-    assert_eq!(replayed.height(), expected_height, "replayed height must match production");
     assert_eq!(
-        replayed.utxo_set.state_root().expect("UTXO serialization failed"),
+        replayed.height(),
+        expected_height,
+        "replayed height must match production"
+    );
+    assert_eq!(
+        replayed
+            .utxo_set
+            .state_root()
+            .expect("UTXO serialization failed"),
         expected_utxo_root,
         "replayed UTXO state must match production",
     );

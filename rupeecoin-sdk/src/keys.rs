@@ -114,7 +114,10 @@ mod tests {
         let w1 = Wallet::from_seed(seed);
         let w2 = Wallet::from_seed(seed);
         assert_eq!(w1.address_at(0), w2.address_at(0));
-        assert_eq!(w1.validator_keypair().public_key, w2.validator_keypair().public_key);
+        assert_eq!(
+            w1.validator_keypair().public_key,
+            w2.validator_keypair().public_key
+        );
         // Privacy keys must also be deterministic from seed.
         assert_eq!(w1.privacy.payment_address, w2.privacy.payment_address);
         // Different seed → different payment address.

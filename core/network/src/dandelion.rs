@@ -60,11 +60,7 @@ impl request_response::Codec for StemCodec {
     type Request = DandelionStemReq;
     type Response = DandelionStemAck;
 
-    async fn read_request<T>(
-        &mut self,
-        _: &StreamProtocol,
-        io: &mut T,
-    ) -> io::Result<Self::Request>
+    async fn read_request<T>(&mut self, _: &StreamProtocol, io: &mut T) -> io::Result<Self::Request>
     where
         T: AsyncRead + Unpin + Send,
     {
@@ -183,14 +179,9 @@ impl DandelionRouter {
             .collect();
         expired
             .into_iter()
-            .filter_map(|id| {
-                self.pending
-                    .remove(&id)
-                    .map(|e| (id, e.tx_bytes))
-            })
+            .filter_map(|id| self.pending.remove(&id).map(|e| (id, e.tx_bytes)))
             .collect()
     }
-
 }
 
 // ── Peer selection ────────────────────────────────────────────────────────────
@@ -248,7 +239,10 @@ mod tests {
         }
         // Every value in [STEM_MIN_HOPS, STEM_MAX_HOPS] should appear.
         for h in STEM_MIN_HOPS..=STEM_MAX_HOPS {
-            assert!(seen.contains(&h), "hop count {h} never seen in 10 000 samples");
+            assert!(
+                seen.contains(&h),
+                "hop count {h} never seen in 10 000 samples"
+            );
         }
     }
 

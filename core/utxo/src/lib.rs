@@ -31,7 +31,10 @@ pub enum UtxoError {
     #[error("invalid nonce: expected {expected}, got {got}")]
     InvalidNonce { expected: u64, got: u64 },
     #[error("coinbase output not yet mature: spendable at block {available_at}, current height {current_height}")]
-    CoinbaseImmature { available_at: u64, current_height: u64 },
+    CoinbaseImmature {
+        available_at: u64,
+        current_height: u64,
+    },
 }
 
 /// In-memory UTXO set with nonce tracking and state-root support.
@@ -97,7 +100,11 @@ impl UtxoSet {
     ///
     /// `current_height` is the height of the block the tx would be included in,
     /// used for expiry checking.
-    pub fn validate_transfer(&self, tx: &Transaction, current_height: u64) -> Result<(), UtxoError> {
+    pub fn validate_transfer(
+        &self,
+        tx: &Transaction,
+        current_height: u64,
+    ) -> Result<(), UtxoError> {
         if tx.inputs.is_empty() {
             return Err(UtxoError::NoInputs);
         }
@@ -190,7 +197,10 @@ impl UtxoSet {
             }
             let txid = tx.txid();
             for (vout, output) in tx.outputs.iter().enumerate() {
-                let op = OutPoint { txid, vout: vout as u32 };
+                let op = OutPoint {
+                    txid,
+                    vout: vout as u32,
+                };
                 if is_coinbase {
                     self.coinbase_heights.insert(op.clone(), height);
                 }
@@ -282,7 +292,10 @@ mod tests {
             nonce: 0,
             expiry: 0,
             inputs: vec![],
-            outputs: vec![TxOutput { amount: 5_000_000_000, recipient }],
+            outputs: vec![TxOutput {
+                amount: 5_000_000_000,
+                recipient,
+            }],
             coinbase_data: Some(height.to_le_bytes().to_vec()),
         }
     }
@@ -321,7 +334,10 @@ mod tests {
         let block = dummy_block(1, vec![cb.clone()]);
         utxo_set.apply_block(&block).unwrap();
 
-        let outpoint = rupeecoin_types::OutPoint { txid: cb.txid(), vout: 0 };
+        let outpoint = rupeecoin_types::OutPoint {
+            txid: cb.txid(),
+            vout: 0,
+        };
         let spend = Transaction {
             version: 1,
             chain_id: 1,
@@ -332,14 +348,23 @@ mod tests {
                 public_key: kp.public_key.clone(),
                 signature: rupeecoin_crypto::Signature::empty(),
             }],
-            outputs: vec![TxOutput { amount: 4_999_000_000, recipient: addr }],
+            outputs: vec![TxOutput {
+                amount: 4_999_000_000,
+                recipient: addr,
+            }],
             coinbase_data: None,
         };
 
         // At height 50 (< 1 + 100 = 101), spend must be rejected.
         let err = utxo_set.validate_transfer(&spend, 50).unwrap_err();
         assert!(
-            matches!(err, UtxoError::CoinbaseImmature { available_at: 101, current_height: 50 }),
+            matches!(
+                err,
+                UtxoError::CoinbaseImmature {
+                    available_at: 101,
+                    current_height: 50
+                }
+            ),
             "unexpected error: {err:?}"
         );
     }
@@ -354,7 +379,10 @@ mod tests {
         let block = dummy_block(1, vec![cb.clone()]);
         utxo_set.apply_block(&block).unwrap();
 
-        let outpoint = rupeecoin_types::OutPoint { txid: cb.txid(), vout: 0 };
+        let outpoint = rupeecoin_types::OutPoint {
+            txid: cb.txid(),
+            vout: 0,
+        };
         let sig_hash = {
             let tmp = Transaction {
                 version: 1,
@@ -366,7 +394,10 @@ mod tests {
                     public_key: kp.public_key.clone(),
                     signature: rupeecoin_crypto::Signature::empty(),
                 }],
-                outputs: vec![TxOutput { amount: 4_999_000_000, recipient: addr }],
+                outputs: vec![TxOutput {
+                    amount: 4_999_000_000,
+                    recipient: addr,
+                }],
                 coinbase_data: None,
             };
             tmp.sig_hash()
@@ -383,7 +414,10 @@ mod tests {
                 public_key: kp.public_key.clone(),
                 signature: sig,
             }],
-            outputs: vec![TxOutput { amount: 4_999_000_000, recipient: addr }],
+            outputs: vec![TxOutput {
+                amount: 4_999_000_000,
+                recipient: addr,
+            }],
             coinbase_data: None,
         };
 

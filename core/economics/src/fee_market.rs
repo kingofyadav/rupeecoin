@@ -28,15 +28,13 @@ pub fn next_base_fee(current_base_fee: u64, gas_used: u64) -> u64 {
     }
     let new_fee: u64 = if gas_used > GAS_TARGET {
         let excess = (gas_used - GAS_TARGET) as u128;
-        let increase = (current_base_fee as u128 * excess
-            / GAS_TARGET as u128
-            / CHANGE_DENOM as u128) as u64;
+        let increase =
+            (current_base_fee as u128 * excess / GAS_TARGET as u128 / CHANGE_DENOM as u128) as u64;
         current_base_fee.saturating_add(increase.max(1))
     } else {
         let deficit = (GAS_TARGET - gas_used) as u128;
-        let decrease = (current_base_fee as u128 * deficit
-            / GAS_TARGET as u128
-            / CHANGE_DENOM as u128) as u64;
+        let decrease =
+            (current_base_fee as u128 * deficit / GAS_TARGET as u128 / CHANGE_DENOM as u128) as u64;
         current_base_fee.saturating_sub(decrease)
     };
     new_fee.max(MIN_BASE_FEE)

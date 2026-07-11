@@ -152,7 +152,10 @@ impl NodeRpc {
         struct Resp {
             claimable_rewards: u64,
         }
-        let url = format!("{}/rpc/validator_info?addr={}", self.base_url, payment_addr_hex);
+        let url = format!(
+            "{}/rpc/validator_info?addr={}",
+            self.base_url, payment_addr_hex
+        );
         let resp: Resp = ureq::get(&url).call()?.into_json()?;
         Ok(resp.claimable_rewards)
     }
@@ -169,10 +172,7 @@ impl NodeRpc {
     }
 
     /// Fetch unspent transparent UTXOs for a 20-byte address (hex).
-    pub fn get_utxos(
-        &self,
-        addr_hex: &str,
-    ) -> Result<Vec<UtxoEntry>, RpcClientError> {
+    pub fn get_utxos(&self, addr_hex: &str) -> Result<Vec<UtxoEntry>, RpcClientError> {
         let url = format!("{}/rpc/utxos?addr={}", self.base_url, addr_hex);
         let entries: Vec<UtxoEntry> = ureq::get(&url).call()?.into_json()?;
         Ok(entries)

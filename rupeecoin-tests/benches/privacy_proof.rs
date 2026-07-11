@@ -14,7 +14,9 @@ use std::time::Duration;
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 
-use rupeecoin_zkproof::{prove_spend, prove_spend_batch, verify_spend, verify_spend_batch, BatchSpendInput};
+use rupeecoin_zkproof::{
+    prove_spend, prove_spend_batch, verify_spend, verify_spend_batch, BatchSpendInput,
+};
 
 // Fixed witness values (same as the existing round-trip unit test).
 const NK: [u64; 4] = [1, 2, 3, 4];
@@ -65,7 +67,10 @@ fn bench_batch_prove(c: &mut Criterion) {
     group.measurement_time(Duration::from_secs(120));
 
     // 2-input batch (512-row trace)
-    let inputs2 = [make_batch_input(NK, CM), make_batch_input([10, 20, 30, 40], [50, 60, 70, 80])];
+    let inputs2 = [
+        make_batch_input(NK, CM),
+        make_batch_input([10, 20, 30, 40], [50, 60, 70, 80]),
+    ];
     group.bench_function("prove_spend_batch_n2", |b| {
         b.iter(|| black_box(prove_spend_batch(&inputs2).expect("batch prove n=2")))
     });
@@ -74,7 +79,10 @@ fn bench_batch_prove(c: &mut Criterion) {
 }
 
 fn bench_batch_verify(c: &mut Criterion) {
-    let inputs2 = [make_batch_input(NK, CM), make_batch_input([10, 20, 30, 40], [50, 60, 70, 80])];
+    let inputs2 = [
+        make_batch_input(NK, CM),
+        make_batch_input([10, 20, 30, 40], [50, 60, 70, 80]),
+    ];
     let (proof2, _) = prove_spend_batch(&inputs2).expect("setup batch proof n=2");
 
     let mut group = c.benchmark_group("privacy_proof");
@@ -88,5 +96,11 @@ fn bench_batch_verify(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_prove, bench_verify, bench_batch_prove, bench_batch_verify);
+criterion_group!(
+    benches,
+    bench_prove,
+    bench_verify,
+    bench_batch_prove,
+    bench_batch_verify
+);
 criterion_main!(benches);

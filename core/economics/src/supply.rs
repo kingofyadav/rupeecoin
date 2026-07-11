@@ -3,9 +3,9 @@ use rupeecoin_types::MICRO_RPC_PER_COIN;
 pub const INITIAL_BLOCK_REWARD: u64 = 50 * MICRO_RPC_PER_COIN;
 
 // Block heights at which the reward halves (365-day year at 4 s/block).
-pub const HALVING_1: u64 = 31_536_000;  // Year  4
-pub const HALVING_2: u64 = 63_072_000;  // Year  8
-pub const HALVING_3: u64 = 94_608_000;  // Year 12
+pub const HALVING_1: u64 = 31_536_000; // Year  4
+pub const HALVING_2: u64 = 63_072_000; // Year  8
+pub const HALVING_3: u64 = 94_608_000; // Year 12
 pub const HALVING_4: u64 = 126_144_000; // Year 16
 
 // Fixed tail emission after the final halving: 1 RPC per block.
@@ -22,13 +22,13 @@ pub fn block_reward(height: u64) -> u64 {
     if height >= HALVING_4 {
         TAIL_EMISSION
     } else if height >= HALVING_3 {
-        INITIAL_BLOCK_REWARD / 8   // 625_000_000
+        INITIAL_BLOCK_REWARD / 8 // 625_000_000
     } else if height >= HALVING_2 {
-        INITIAL_BLOCK_REWARD / 4   // 1_250_000_000
+        INITIAL_BLOCK_REWARD / 4 // 1_250_000_000
     } else if height >= HALVING_1 {
-        INITIAL_BLOCK_REWARD / 2   // 2_500_000_000
+        INITIAL_BLOCK_REWARD / 2 // 2_500_000_000
     } else {
-        INITIAL_BLOCK_REWARD       // 5_000_000_000
+        INITIAL_BLOCK_REWARD // 5_000_000_000
     }
 }
 

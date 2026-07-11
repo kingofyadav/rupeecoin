@@ -4,12 +4,15 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use rupeecoin_consensus::{select_proposer, slot_to_epoch, verify_block_vrf, SLOTS_PER_EPOCH};
+use rupeecoin_crypto::Address;
 use rupeecoin_crypto::{hash_data, Hash, KeyPair, PublicKey, Signature, VrfProof};
 use rupeecoin_economics::{
-    apply_inactivity_leak, compute_block_rewards, next_base_fee, route_fees,
-    treasury_address, PmfpAccumulator,
+    apply_inactivity_leak, compute_block_rewards, next_base_fee, route_fees, treasury_address,
+    PmfpAccumulator,
 };
-use rupeecoin_privacy::{CommitmentTree, Nullifier, PrivacyBlockApply, PrivacyTxError, SpendEvidence};
+use rupeecoin_privacy::{
+    CommitmentTree, Nullifier, PrivacyBlockApply, PrivacyTxError, SpendEvidence,
+};
 use rupeecoin_staking::{ValidatorRegistry, ValidatorStatus};
 use rupeecoin_types::{
     block::{merkle_root, privacy_merkle_root},
@@ -17,7 +20,6 @@ use rupeecoin_types::{
     MAINNET_CHAIN_ID,
 };
 use rupeecoin_utxo::{UtxoError, UtxoSet};
-use rupeecoin_crypto::Address;
 use thiserror::Error;
 
 pub use genesis::{genesis_block, genesis_block_with_timestamp};
@@ -168,14 +170,24 @@ impl Chain {
         let height = block.header.height;
         let apply = PrivacyBlockApply::compute(&block.privacy_txs, &self.commitment_tree, height);
 
-        let utxo_root = self.utxo_set.state_root().expect("UTXO serialization failed");
+        let utxo_root = self
+            .utxo_set
+            .state_root()
+            .expect("UTXO serialization failed");
         let computed = hash_data(
-            &[utxo_root.as_bytes().as_slice(), apply.new_tree_root.as_bytes().as_slice()].concat(),
+            &[
+                utxo_root.as_bytes().as_slice(),
+                apply.new_tree_root.as_bytes().as_slice(),
+            ]
+            .concat(),
         );
         if block.header.state_root != computed {
             // Undo the UTXO apply before returning the error.
             self.undo_utxo_delta(&delta);
-            return Err(ChainError::InvalidStateRoot(block.header.state_root, computed));
+            return Err(ChainError::InvalidStateRoot(
+                block.header.state_root,
+                computed,
+            ));
         }
 
         // ── Privacy ───────────────────────────────────────────────────────────
@@ -232,13 +244,23 @@ impl Chain {
         let height = block.header.height;
         let apply = PrivacyBlockApply::compute(&block.privacy_txs, &self.commitment_tree, height);
 
-        let utxo_root = self.utxo_set.state_root().expect("UTXO serialization failed");
+        let utxo_root = self
+            .utxo_set
+            .state_root()
+            .expect("UTXO serialization failed");
         let computed = hash_data(
-            &[utxo_root.as_bytes().as_slice(), apply.new_tree_root.as_bytes().as_slice()].concat(),
+            &[
+                utxo_root.as_bytes().as_slice(),
+                apply.new_tree_root.as_bytes().as_slice(),
+            ]
+            .concat(),
         );
         if block.header.state_root != computed {
             self.undo_utxo_delta(&delta);
-            return Err(ChainError::InvalidStateRoot(block.header.state_root, computed));
+            return Err(ChainError::InvalidStateRoot(
+                block.header.state_root,
+                computed,
+            ));
         }
 
         for cm in &apply.new_commitments {
@@ -289,7 +311,10 @@ impl Chain {
             }
             let txid = tx.txid();
             for (vout, _) in tx.outputs.iter().enumerate() {
-                let op = OutPoint { txid, vout: vout as u32 };
+                let op = OutPoint {
+                    txid,
+                    vout: vout as u32,
+                };
                 added.push(op.clone());
                 if is_coinbase {
                     coinbase_added.push(op);
@@ -297,7 +322,13 @@ impl Chain {
             }
         }
 
-        BlockDelta { added, removed, coinbase_added, nonce_incremented, inserted_nullifiers: vec![] }
+        BlockDelta {
+            added,
+            removed,
+            coinbase_added,
+            nonce_incremented,
+            inserted_nullifiers: vec![],
+        }
     }
 
     /// Undo a block's UTXO and nullifier changes.  Used for reorg rollback.
@@ -363,7 +394,12 @@ impl Chain {
         }
     }
 
-    fn apply_economics(&mut self, block: &Block, registry: &mut ValidatorRegistry, total_fees: u64) {
+    fn apply_economics(
+        &mut self,
+        block: &Block,
+        registry: &mut ValidatorRegistry,
+        total_fees: u64,
+    ) {
         let height = block.header.height;
         let slot = block.header.slot;
         let epoch = slot_to_epoch(slot);
@@ -462,7 +498,10 @@ impl Chain {
                 let claimed: u64 = tx.outputs.iter().map(|o| o.amount).sum();
                 let entry = claimed_per_validator.entry(addr).or_insert(0);
                 *entry = entry.saturating_add(claimed);
-                let available = registry.get(&addr).map(|v| v.claimable_rewards).unwrap_or(0);
+                let available = registry
+                    .get(&addr)
+                    .map(|v| v.claimable_rewards)
+                    .unwrap_or(0);
                 if *entry > available {
                     return Err(ChainError::InvalidRewardClaim(format!(
                         "cumulative claim {} exceeds available {} for {addr}",
@@ -588,8 +627,12 @@ impl Chain {
 
 fn slashed_validator_addr(evidence: &SlashingEvidence) -> Hash {
     match evidence {
-        SlashingEvidence::DoubleProposal { proposer_pubkey, .. } => proposer_pubkey.to_hash(),
-        SlashingEvidence::DoubleVote { attestation_a, .. } => attestation_a.validator_pubkey.to_hash(),
+        SlashingEvidence::DoubleProposal {
+            proposer_pubkey, ..
+        } => proposer_pubkey.to_hash(),
+        SlashingEvidence::DoubleVote { attestation_a, .. } => {
+            attestation_a.validator_pubkey.to_hash()
+        }
     }
 }
 
@@ -608,9 +651,9 @@ impl Chain {
         // signature over (domain ‖ validator_addr ‖ outputs). Without this,
         // any block producer could redirect another validator's rewards to
         // an address they control (audit H-10).
-        let (pk_bytes, sig_bytes) = tx.reward_claim_auth().ok_or_else(|| {
-            ChainError::InvalidRewardClaim("missing claim authorization".into())
-        })?;
+        let (pk_bytes, sig_bytes) = tx
+            .reward_claim_auth()
+            .ok_or_else(|| ChainError::InvalidRewardClaim("missing claim authorization".into()))?;
         let pk = PublicKey::from_bytes(pk_bytes)
             .map_err(|_| ChainError::InvalidRewardClaim("invalid claim public key".into()))?;
         if pk.to_hash() != addr {
@@ -682,12 +725,16 @@ impl Chain {
                 attestation_a
                     .validator_pubkey
                     .verify(sd_a.as_bytes(), &attestation_a.signature)
-                    .map_err(|_| ChainError::InvalidSlashingReport("invalid attestation_a sig".into()))?;
+                    .map_err(|_| {
+                        ChainError::InvalidSlashingReport("invalid attestation_a sig".into())
+                    })?;
                 let sd_b = Attestation::sig_data(attestation_b.slot, &attestation_b.block_hash);
                 attestation_b
                     .validator_pubkey
                     .verify(sd_b.as_bytes(), &attestation_b.signature)
-                    .map_err(|_| ChainError::InvalidSlashingReport("invalid attestation_b sig".into()))?;
+                    .map_err(|_| {
+                        ChainError::InvalidSlashingReport("invalid attestation_b sig".into())
+                    })?;
             }
         }
 
@@ -854,7 +901,10 @@ pub fn build_reward_claim(
     output_addr: rupeecoin_crypto::Address,
     keypair: &KeyPair,
 ) -> Transaction {
-    let outputs = vec![TxOutput { amount, recipient: output_addr }];
+    let outputs = vec![TxOutput {
+        amount,
+        recipient: output_addr,
+    }];
     let sig = keypair.sign(&reward_claim_sig_message(&validator_addr, &outputs));
     let pk = keypair.public_key.as_bytes();
 
@@ -895,7 +945,10 @@ pub fn build_slash_report(
         nonce: 0,
         expiry: 0,
         inputs: vec![],
-        outputs: vec![TxOutput { amount: reporter_reward, recipient: reporter_addr }],
+        outputs: vec![TxOutput {
+            amount: reporter_reward,
+            recipient: reporter_addr,
+        }],
         coinbase_data: Some(data),
     })
 }
@@ -946,8 +999,7 @@ pub fn build_block(
     let prev_hash = tip.hash();
 
     let active_count = registry.active_count();
-    let proposer_index =
-        select_proposer(slot, &tip.header.vrf_output, active_count) as u32;
+    let proposer_index = select_proposer(slot, &tip.header.vrf_output, active_count) as u32;
     let proposer_addr = registry
         .active_set()
         .get(proposer_index as usize)
@@ -957,7 +1009,12 @@ pub fn build_block(
     let base_fee = next_base_fee(tip.header.base_fee, tip.header.gas_used);
     let gas_used = extra_txs.len() as u64;
 
-    let coinbase = build_coinbase(height, &proposer_keypair.public_key, &proposer_addr, registry);
+    let coinbase = build_coinbase(
+        height,
+        &proposer_keypair.public_key,
+        &proposer_addr,
+        registry,
+    );
     let mut transactions = vec![coinbase];
     transactions.extend(extra_txs);
     let mr = merkle_root(&transactions);
@@ -989,11 +1046,13 @@ pub fn build_block(
         let mut snap = chain.utxo_set.clone();
         snap.apply_transactions(&transactions);
         let utxo_root = snap.state_root().expect("UTXO serialization failed");
-        let future_apply =
-            PrivacyBlockApply::compute(&privacy_txs, &chain.commitment_tree, height);
+        let future_apply = PrivacyBlockApply::compute(&privacy_txs, &chain.commitment_tree, height);
         hash_data(
-            &[utxo_root.as_bytes().as_slice(), future_apply.new_tree_root.as_bytes().as_slice()]
-                .concat(),
+            &[
+                utxo_root.as_bytes().as_slice(),
+                future_apply.new_tree_root.as_bytes().as_slice(),
+            ]
+            .concat(),
         )
     };
 

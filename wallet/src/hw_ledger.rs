@@ -32,13 +32,15 @@ struct HidrawInfo {
 
 // HIDIOCGRAWINFO = _IOR('H', 0x03, struct hidraw_devinfo)
 // On Linux x86_64: _IOR(type, nr, size) = ((2<<30) | (type<<8) | nr | (size<<16))
-const HIDIOCGRAWINFO: u64 = (2u64 << 30)
-    | (b'H' as u64) << 8
-    | 0x03u64
-    | (std::mem::size_of::<HidrawInfo>() as u64) << 16;
+const HIDIOCGRAWINFO: u64 =
+    (2u64 << 30) | (b'H' as u64) << 8 | 0x03u64 | (std::mem::size_of::<HidrawInfo>() as u64) << 16;
 
 fn get_hidraw_info(fd: i32) -> std::io::Result<HidrawInfo> {
-    let mut info = HidrawInfo { bus_type: 0, vendor: 0, product: 0 };
+    let mut info = HidrawInfo {
+        bus_type: 0,
+        vendor: 0,
+        product: 0,
+    };
     let ret = unsafe {
         // Use the raw `ioctl` syscall without pulling in `libc`.
         ioctl_raw(fd, HIDIOCGRAWINFO, &mut info as *mut HidrawInfo as usize)

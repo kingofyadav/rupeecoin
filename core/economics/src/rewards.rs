@@ -82,8 +82,8 @@ pub fn compute_block_rewards(
     }
 
     let proposer_weight = registry.effective_weight(proposer_addr);
-    let proposer_reward = (distributable as u128 * proposer_weight as u128
-        / total_weight as u128) as u64;
+    let proposer_reward =
+        (distributable as u128 * proposer_weight as u128 / total_weight as u128) as u64;
 
     let mut credits = Vec::new();
     let mut credited_sum: u64 = 0;

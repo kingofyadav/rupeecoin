@@ -14,7 +14,9 @@ use anyhow::{anyhow, bail, Context, Result};
 use serde::Deserialize;
 
 use rupeecoin_crypto::{decode_address, encode_address, Hash, KeyPair, Signature};
-use rupeecoin_types::{OutPoint, Transaction, TxInput, TxOutput, MICRO_RPC_PER_COIN, TESTNET_CHAIN_ID};
+use rupeecoin_types::{
+    OutPoint, Transaction, TxInput, TxOutput, MICRO_RPC_PER_COIN, TESTNET_CHAIN_ID,
+};
 
 fn main() -> Result<()> {
     let mut seed_hex = String::new();
@@ -26,30 +28,34 @@ fn main() -> Result<()> {
     let mut args = std::env::args().skip(1);
     while let Some(flag) = args.next() {
         match flag.as_str() {
-            "--seed"   => seed_hex  = args.next().context("--seed value missing")?,
-            "--to"     => to_b58    = args.next().context("--to value missing")?,
+            "--seed" => seed_hex = args.next().context("--seed value missing")?,
+            "--to" => to_b58 = args.next().context("--to value missing")?,
             "--amount" => amount_rpc = args.next().context("--amount value missing")?.parse()?,
-            "--node"   => node_url  = args.next().context("--node value missing")?,
+            "--node" => node_url = args.next().context("--node value missing")?,
             "--chain-id" => chain_id = args.next().context("--chain-id value missing")?.parse()?,
             other => bail!("unknown flag: {other}"),
         }
     }
 
-    if seed_hex.is_empty() { bail!("--seed is required"); }
-    if to_b58.is_empty()   { bail!("--to is required");   }
+    if seed_hex.is_empty() {
+        bail!("--seed is required");
+    }
+    if to_b58.is_empty() {
+        bail!("--to is required");
+    }
 
     // Derive the sender keypair from the seed.
     let raw = hex::decode(&seed_hex).context("--seed must be valid hex")?;
-    let seed_bytes: [u8; 32] = raw.try_into()
+    let seed_bytes: [u8; 32] = raw
+        .try_into()
         .map_err(|_| anyhow!("--seed must be 32 bytes (64 hex chars)"))?;
     let kp = KeyPair::from_seed(&seed_bytes);
     let sender_addr = kp.public_key.to_address();
-    let sender_hex  = hex::encode(sender_addr.0);
+    let sender_hex = hex::encode(sender_addr.0);
     println!("Sender address : {}", encode_address(&sender_addr));
 
     // Decode recipient.
-    let recipient = decode_address(&to_b58)
-        .map_err(|e| anyhow!("invalid --to address: {e}"))?;
+    let recipient = decode_address(&to_b58).map_err(|e| anyhow!("invalid --to address: {e}"))?;
     println!("Recipient      : {to_b58}");
 
     let amount_micro = (amount_rpc * MICRO_RPC_PER_COIN as f64) as u64;
@@ -62,7 +68,12 @@ fn main() -> Result<()> {
         bail!("No UTXOs found for sender — has the node mined any blocks with --validator-seed?");
     }
     let balance: u64 = utxos.iter().map(|u| u.amount_micro).sum();
-    println!("Found {} UTXO(s)  total={} µRPC ({:.4} RPC)", utxos.len(), balance, balance as f64 / MICRO_RPC_PER_COIN as f64);
+    println!(
+        "Found {} UTXO(s)  total={} µRPC ({:.4} RPC)",
+        utxos.len(),
+        balance,
+        balance as f64 / MICRO_RPC_PER_COIN as f64
+    );
 
     if balance < amount_micro {
         bail!("Insufficient balance: have {balance} µRPC, need {amount_micro} µRPC");
@@ -74,7 +85,9 @@ fn main() -> Result<()> {
     let mut selected = Vec::new();
     let mut total_in: u64 = 0;
     for u in &sorted {
-        if total_in >= amount_micro { break; }
+        if total_in >= amount_micro {
+            break;
+        }
         selected.push(u);
         total_in += u.amount_micro;
     }
@@ -83,21 +96,33 @@ fn main() -> Result<()> {
     // We keep change ≥ 0; fee is effectively 0 here (no output fee field).
     let change = total_in - amount_micro;
 
-    let mut outputs = vec![TxOutput { amount: amount_micro, recipient }];
+    let mut outputs = vec![TxOutput {
+        amount: amount_micro,
+        recipient,
+    }];
     if change > 0 {
-        outputs.push(TxOutput { amount: change, recipient: sender_addr });
+        outputs.push(TxOutput {
+            amount: change,
+            recipient: sender_addr,
+        });
     }
 
     // Build inputs with placeholder sigs.
-    let inputs: Vec<TxInput> = selected.iter().map(|u| {
-        let raw = hex::decode(&u.txid).expect("txid hex");
-        let arr: [u8; 32] = raw.try_into().expect("txid 32 bytes");
-        TxInput {
-            outpoint: OutPoint { txid: Hash::from_bytes(arr), vout: u.vout },
-            public_key: kp.public_key.clone(),
-            signature: Signature::empty(),
-        }
-    }).collect();
+    let inputs: Vec<TxInput> = selected
+        .iter()
+        .map(|u| {
+            let raw = hex::decode(&u.txid).expect("txid hex");
+            let arr: [u8; 32] = raw.try_into().expect("txid 32 bytes");
+            TxInput {
+                outpoint: OutPoint {
+                    txid: Hash::from_bytes(arr),
+                    vout: u.vout,
+                },
+                public_key: kp.public_key.clone(),
+                signature: Signature::empty(),
+            }
+        })
+        .collect();
 
     let mut tx = Transaction {
         version: 1,

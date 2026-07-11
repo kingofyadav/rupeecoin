@@ -5,7 +5,9 @@
 
 use anyhow::{bail, Result};
 use rupeecoin_crypto::{KeyPair, Signature};
-use rupeecoin_types::{OutPoint, Transaction, TxInput, TxOutput, MAINNET_CHAIN_ID, TESTNET_CHAIN_ID};
+use rupeecoin_types::{
+    OutPoint, Transaction, TxInput, TxOutput, MAINNET_CHAIN_ID, TESTNET_CHAIN_ID,
+};
 
 /// Build and sign a transparent transfer transaction.
 ///

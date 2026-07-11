@@ -1,6 +1,6 @@
-mod hw_wallet;
 mod hw_ledger;
 mod hw_trezor;
+mod hw_wallet;
 use hw_wallet::HardwareWallet as _;
 mod keystore;
 mod node_rpc;
@@ -11,12 +11,12 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand};
 
 use rupeecoin_crypto::{decode_address, encode_address, HdNode, HD_RECEIVE};
-use rupeecoin_types::{OutPoint, Transaction, TxInput, TxOutput};
 use rupeecoin_privacy::{
     EncryptedNote, Note, PrivacyKeyBundle, ShieldedInput, ShieldedOutput, ShieldedTxBuilder,
     StarkSpendProof, ViewPublicKey,
 };
 use rupeecoin_types::MICRO_RPC_PER_COIN;
+use rupeecoin_types::{OutPoint, Transaction, TxInput, TxOutput};
 
 use node_rpc::NodeRpc;
 
@@ -125,14 +125,29 @@ fn run(cli: Cli) -> anyhow::Result<()> {
         Command::Address => cmd_address(&cli.keys),
         Command::Receive => cmd_receive(&cli.keys),
         Command::Scan { rpc } => cmd_scan(&cli.keys, &rpc),
-        Command::Send { rpc, to, amount, fee, hardware_wallet } => {
-            cmd_send(&cli.keys, &rpc, &to, amount, fee, hardware_wallet.as_deref())
-        }
+        Command::Send {
+            rpc,
+            to,
+            amount,
+            fee,
+            hardware_wallet,
+        } => cmd_send(
+            &cli.keys,
+            &rpc,
+            &to,
+            amount,
+            fee,
+            hardware_wallet.as_deref(),
+        ),
         Command::Claim { rpc } => cmd_claim(&cli.keys, &rpc),
         Command::UpgradeHd => cmd_upgrade_hd(&cli.keys),
-        Command::SignTx { rpc, to, amount, chain_id, expiry } => {
-            cmd_sign_tx(&cli.keys, &rpc, &to, amount, chain_id, expiry)
-        }
+        Command::SignTx {
+            rpc,
+            to,
+            amount,
+            chain_id,
+            expiry,
+        } => cmd_sign_tx(&cli.keys, &rpc, &to, amount, chain_id, expiry),
     }
 }
 
@@ -161,7 +176,9 @@ fn cmd_generate(keys_path: &PathBuf) -> anyhow::Result<()> {
     println!("Privacy payment address: {payment_hex}");
     println!("Transparent address #0:  {first_addr}");
     println!("Shielded send URI:       rupeecoin:{payment_hex}?vpk={vpk_hex}");
-    println!("\nBackup the wallet file passphrase and the HD master seed (32 bytes) to restore funds.");
+    println!(
+        "\nBackup the wallet file passphrase and the HD master seed (32 bytes) to restore funds."
+    );
     Ok(())
 }
 
@@ -227,7 +244,10 @@ fn cmd_receive(keys_path: &PathBuf) -> anyhow::Result<()> {
 
     println!("Receive address #{}: {current_addr}", ks.hd_receive_index);
     println!("Payment URI: rupeecoin:{current_addr}");
-    println!("(index bumped to {} — next call will show a fresh address)", next_index);
+    println!(
+        "(index bumped to {} — next call will show a fresh address)",
+        next_index
+    );
     Ok(())
 }
 
@@ -246,12 +266,20 @@ fn cmd_scan(keys_path: &PathBuf, rpc_url: &str) -> anyhow::Result<()> {
     }
 
     let mut total_micro_rpc: u64 = 0;
-    println!("{:<8}  {:>18}  {}", "Index", "Value (RPC)", "Nullifier (first 16 hex chars)");
+    println!(
+        "{:<8}  {:>18}  {}",
+        "Index", "Value (RPC)", "Nullifier (first 16 hex chars)"
+    );
     println!("{}", "─".repeat(72));
     for owned in &notes {
         let rpc_value = owned.note.value as f64 / MICRO_RPC_PER_COIN as f64;
         let nf_hex = hex::encode(owned.nullifier.0.as_bytes());
-        println!("{:<8}  {:>18.8}  {}…", owned.index, rpc_value, &nf_hex[..16]);
+        println!(
+            "{:<8}  {:>18.8}  {}…",
+            owned.index,
+            rpc_value,
+            &nf_hex[..16]
+        );
         total_micro_rpc = total_micro_rpc.saturating_add(owned.note.value);
     }
     println!("{}", "─".repeat(72));
@@ -278,32 +306,34 @@ fn cmd_send(
 
     match hardware_wallet {
         Some("ledger") => {
-            let hw: Box<dyn hw_wallet::HardwareWallet> = match hw_ledger::LedgerHardwareWallet::open() {
-                Ok(ledger) => {
-                    println!("Hardware wallet: {}", ledger.device_info());
-                    Box::new(ledger)
-                }
-                Err(e) => {
-                    if let Some(ref seed) = ks.hd_master_seed {
-                        println!("Ledger not found ({e}); using in-memory mock");
-                        Box::new(hw_wallet::MockHardwareWallet::new(seed))
-                    } else {
-                        anyhow::bail!("No Ledger device found and no HD seed available: {e}");
+            let hw: Box<dyn hw_wallet::HardwareWallet> =
+                match hw_ledger::LedgerHardwareWallet::open() {
+                    Ok(ledger) => {
+                        println!("Hardware wallet: {}", ledger.device_info());
+                        Box::new(ledger)
                     }
-                }
-            };
+                    Err(e) => {
+                        if let Some(ref seed) = ks.hd_master_seed {
+                            println!("Ledger not found ({e}); using in-memory mock");
+                            Box::new(hw_wallet::MockHardwareWallet::new(seed))
+                        } else {
+                            anyhow::bail!("No Ledger device found and no HD seed available: {e}");
+                        }
+                    }
+                };
             println!("  Signing with: {}", hw.device_info());
         }
         Some("trezor") => {
-            let hw: Box<dyn hw_wallet::HardwareWallet> = match hw_trezor::TrezorHardwareWallet::open() {
-                Ok(trezor) => {
-                    println!("Hardware wallet: {}", trezor.device_info());
-                    Box::new(trezor)
-                }
-                Err(e) => {
-                    anyhow::bail!("Trezor error: {e}");
-                }
-            };
+            let hw: Box<dyn hw_wallet::HardwareWallet> =
+                match hw_trezor::TrezorHardwareWallet::open() {
+                    Ok(trezor) => {
+                        println!("Hardware wallet: {}", trezor.device_info());
+                        Box::new(trezor)
+                    }
+                    Err(e) => {
+                        anyhow::bail!("Trezor error: {e}");
+                    }
+                };
             println!("  Signing with: {}", hw.device_info());
         }
         Some(other) => {
@@ -326,7 +356,8 @@ fn cmd_send(
     })?;
 
     println!("Scanning for spendable notes…");
-    let mut owned_notes = scanner::scan(&rpc, &ks.bundle.view_key.secret, &ks.bundle.nullifier_key)?;
+    let mut owned_notes =
+        scanner::scan(&rpc, &ks.bundle.view_key.secret, &ks.bundle.nullifier_key)?;
     owned_notes.sort_by_key(|n| n.note.value);
 
     let (selected, change_micro) = scanner::select_notes(&owned_notes, amount_micro, fee_micro)
@@ -348,7 +379,10 @@ fn cmd_send(
 
     for owned in selected {
         let (merkle_path, proof_anchor) = rpc.get_merkle_path(owned.index)?;
-        anyhow::ensure!(proof_anchor == anchor, "merkle path anchor mismatch — try again");
+        anyhow::ensure!(
+            proof_anchor == anchor,
+            "merkle path anchor mismatch — try again"
+        );
 
         // Commitment tree now uses Poseidon (Phase 11.1). Siblings are Poseidon
         // field-element values packed as 32 LE bytes; reinterpret as [u64; 4].
@@ -373,7 +407,11 @@ fn cmd_send(
             anchor_felts: zk.anchor_felts,
             nullifier_felts,
         };
-        builder.add_input(ShieldedInput::new_stark(owned.nullifier, stark, owned.note.value));
+        builder.add_input(ShieldedInput::new_stark(
+            owned.nullifier,
+            stark,
+            owned.note.value,
+        ));
     }
 
     let output_note = Note::new(amount_micro, to_address.clone());
@@ -452,13 +490,23 @@ fn hash_to_felt4(h: &[u8; 32]) -> [u64; 4] {
 /// Derive the Base58Check transparent address at m/HD_RECEIVE/index.
 fn hd_receive_address(master_seed: &[u8; 32], index: u32) -> String {
     let master = HdNode::master(master_seed);
-    let keypair = master.child(HD_RECEIVE).expect("depth 1").child(index).expect("depth 2").to_keypair();
+    let keypair = master
+        .child(HD_RECEIVE)
+        .expect("depth 1")
+        .child(index)
+        .expect("depth 2")
+        .to_keypair();
     encode_address(&keypair.public_key.to_address())
 }
 
 /// Derive the full keypair at m/HD_RECEIVE/index (for signing).
 fn hd_receive_keypair(master_seed: &[u8; 32], index: u32) -> rupeecoin_crypto::KeyPair {
-    HdNode::master(master_seed).child(HD_RECEIVE).expect("depth 1").child(index).expect("depth 2").to_keypair()
+    HdNode::master(master_seed)
+        .child(HD_RECEIVE)
+        .expect("depth 1")
+        .child(index)
+        .expect("depth 2")
+        .to_keypair()
 }
 
 // ── payment URI parser ────────────────────────────────────────────────────────
@@ -491,9 +539,8 @@ fn parse_payment_address(s: &str) -> anyhow::Result<ParsedRecipient> {
                 .map_err(|_| anyhow::anyhow!("invalid payment address hex in URI"))?
                 .try_into()
                 .map_err(|_| anyhow::anyhow!("payment address must be 32 bytes"))?;
-            let address = rupeecoin_privacy::PaymentAddress(
-                rupeecoin_crypto::Hash::from_bytes(to_bytes),
-            );
+            let address =
+                rupeecoin_privacy::PaymentAddress(rupeecoin_crypto::Hash::from_bytes(to_bytes));
 
             // Extract ?vpk=<hex> (Kyber768 view public key for encryption).
             let view_public_key = query
@@ -505,7 +552,10 @@ fn parse_payment_address(s: &str) -> anyhow::Result<ParsedRecipient> {
                 .and_then(|hex_str| hex::decode(hex_str).ok())
                 .map(ViewPublicKey::from_bytes);
 
-            Ok(ParsedRecipient { address, view_public_key })
+            Ok(ParsedRecipient {
+                address,
+                view_public_key,
+            })
         } else {
             anyhow::bail!(
                 "shielded sends require a URI of the form \
@@ -523,10 +573,12 @@ fn parse_payment_address(s: &str) -> anyhow::Result<ParsedRecipient> {
             .map_err(|_| anyhow::anyhow!("invalid payment address hex"))?
             .try_into()
             .map_err(|_| anyhow::anyhow!("payment address must be 32 bytes"))?;
-        let address = rupeecoin_privacy::PaymentAddress(
-            rupeecoin_crypto::Hash::from_bytes(to_bytes),
-        );
-        Ok(ParsedRecipient { address, view_public_key: None })
+        let address =
+            rupeecoin_privacy::PaymentAddress(rupeecoin_crypto::Hash::from_bytes(to_bytes));
+        Ok(ParsedRecipient {
+            address,
+            view_public_key: None,
+        })
     }
 }
 
@@ -543,9 +595,9 @@ fn cmd_sign_tx(
     expiry: u64,
 ) -> anyhow::Result<()> {
     let ks = keystore::load(keys_path)?;
-    let seed = ks
-        .hd_master_seed
-        .ok_or_else(|| anyhow::anyhow!("wallet has no HD seed — regenerate to enable transparent transfers"))?;
+    let seed = ks.hd_master_seed.ok_or_else(|| {
+        anyhow::anyhow!("wallet has no HD seed — regenerate to enable transparent transfers")
+    })?;
     let kp = hd_receive_keypair(&seed, ks.hd_receive_index);
     let my_addr = kp.public_key.to_address();
     let my_addr_hex = hex::encode(my_addr.as_bytes());
@@ -553,11 +605,15 @@ fn cmd_sign_tx(
     let amount_micro = coins_to_micro(amount_rpc);
 
     let rpc = NodeRpc::new(rpc_url);
-    let utxos = rpc.get_utxos(&my_addr_hex)
+    let utxos = rpc
+        .get_utxos(&my_addr_hex)
         .map_err(|e| anyhow::anyhow!("failed to fetch UTXOs: {e}"))?;
 
     if utxos.is_empty() {
-        anyhow::bail!("no UTXOs found for address {} — fund it first", encode_address(&my_addr));
+        anyhow::bail!(
+            "no UTXOs found for address {} — fund it first",
+            encode_address(&my_addr)
+        );
     }
 
     // Coin selection: greedy, pick smallest UTXOs first until we cover amount.
@@ -575,16 +631,27 @@ fn cmd_sign_tx(
     anyhow::ensure!(
         total_in >= amount_micro,
         "insufficient balance: have {} micro-RPC, need {} micro-RPC",
-        total_in, amount_micro
+        total_in,
+        amount_micro
     );
 
-    let recipient_addr = decode_address(to_b58)
-        .map_err(|_| anyhow::anyhow!("invalid recipient address '{}': must be Base58Check", to_b58))?;
+    let recipient_addr = decode_address(to_b58).map_err(|_| {
+        anyhow::anyhow!(
+            "invalid recipient address '{}': must be Base58Check",
+            to_b58
+        )
+    })?;
     let change_micro = total_in.saturating_sub(amount_micro);
 
-    let mut outputs = vec![TxOutput { amount: amount_micro, recipient: recipient_addr }];
+    let mut outputs = vec![TxOutput {
+        amount: amount_micro,
+        recipient: recipient_addr,
+    }];
     if change_micro > 0 {
-        outputs.push(TxOutput { amount: change_micro, recipient: my_addr });
+        outputs.push(TxOutput {
+            amount: change_micro,
+            recipient: my_addr,
+        });
     }
 
     // Build inputs from selected UTXOs.

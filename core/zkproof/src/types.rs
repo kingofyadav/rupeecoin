@@ -6,7 +6,7 @@ use winterfell::{
     AcceptableOptions, Prover,
 };
 
-use crate::batch::{build_batched_trace, BatchedSpendPublicInputs, BatchSpendProver};
+use crate::batch::{build_batched_trace, BatchSpendProver, BatchedSpendPublicInputs};
 use crate::circuit::{SpendCircuit, SpendPublicInputs};
 use crate::prover::{
     build_trace, compute_merkle_root, compute_nullifier, default_proof_options, SpendProver,
@@ -35,7 +35,11 @@ const GOLDILOCKS_P: u64 = 0xFFFF_FFFF_0000_0001;
 
 #[inline(always)]
 fn felt(v: u64) -> Felt {
-    Felt::new(if v >= GOLDILOCKS_P { v - GOLDILOCKS_P } else { v })
+    Felt::new(if v >= GOLDILOCKS_P {
+        v - GOLDILOCKS_P
+    } else {
+        v
+    })
 }
 
 /// Generate a STARK spend proof.
@@ -75,7 +79,13 @@ pub fn prove_spend(
     let anchor_felts = anchor.map(|f| f.as_int());
     let nullifier_u64 = nullifier.map(|f| f.as_int());
 
-    Ok((StarkSpendProof { proof_bytes, anchor_felts }, nullifier_u64))
+    Ok((
+        StarkSpendProof {
+            proof_bytes,
+            anchor_felts,
+        },
+        nullifier_u64,
+    ))
 }
 
 pub fn verify_spend(proof: &StarkSpendProof, nullifier_u64: [u64; 4]) -> Result<(), ZkError> {
@@ -105,7 +115,10 @@ pub fn verify_spend_raw(
     anchor_felts: [u64; 4],
     nullifier_felts: [u64; 4],
 ) -> Result<(), ZkError> {
-    let proof = StarkSpendProof { proof_bytes: proof_bytes.to_vec(), anchor_felts };
+    let proof = StarkSpendProof {
+        proof_bytes: proof_bytes.to_vec(),
+        anchor_felts,
+    };
     verify_spend(&proof, nullifier_felts)
 }
 
@@ -149,10 +162,14 @@ pub fn prove_spend_batch(
     inputs: &[BatchSpendInput],
 ) -> Result<(BatchedStarkSpendProof, Vec<[u64; 4]>), ZkError> {
     if inputs.is_empty() {
-        return Err(ZkError::ProvingFailed("batch must have at least 1 input".into()));
+        return Err(ZkError::ProvingFailed(
+            "batch must have at least 1 input".into(),
+        ));
     }
     if inputs.len() > 10 {
-        return Err(ZkError::ProvingFailed("batch size exceeds maximum of 10".into()));
+        return Err(ZkError::ProvingFailed(
+            "batch size exceeds maximum of 10".into(),
+        ));
     }
 
     // Convert to Felt witnesses
@@ -172,7 +189,11 @@ pub fn prove_spend_batch(
 
     for w in &witnesses {
         nullifiers.push(compute_nullifier(w.nullifier_key, w.note_commitment));
-        anchors.push(compute_merkle_root(w.note_commitment, &w.siblings, &w.is_right));
+        anchors.push(compute_merkle_root(
+            w.note_commitment,
+            &w.siblings,
+            &w.is_right,
+        ));
     }
 
     // All spends must share the same tree root
@@ -185,7 +206,10 @@ pub fn prove_spend_batch(
         }
     }
 
-    let pub_inputs = BatchedSpendPublicInputs { nullifiers: nullifiers.clone(), anchors };
+    let pub_inputs = BatchedSpendPublicInputs {
+        nullifiers: nullifiers.clone(),
+        anchors,
+    };
 
     // Always use ≥ 2 blocks so the 256-row period is repeated at least once.
     // This keeps the cm-carry polynomial non-trivial for N=1, matching the
@@ -200,8 +224,7 @@ pub fn prove_spend_batch(
 
     let proof_bytes = stark_proof.to_bytes();
     let anchor_felts = shared_anchor.map(|f| f.as_int());
-    let nullifiers_u64: Vec<[u64; 4]> =
-        nullifiers.iter().map(|n| n.map(|f| f.as_int())).collect();
+    let nullifiers_u64: Vec<[u64; 4]> = nullifiers.iter().map(|n| n.map(|f| f.as_int())).collect();
 
     Ok((
         BatchedStarkSpendProof {
@@ -284,7 +307,12 @@ mod tests {
     fn verify_wrong_nullifier_fails() {
         let (proof, nullifier) =
             prove_spend(NK, CM, SIBLINGS, IS_RIGHT_ALL_LEFT).expect("prove_spend must succeed");
-        let bad = [nullifier[0].wrapping_add(1), nullifier[1], nullifier[2], nullifier[3]];
+        let bad = [
+            nullifier[0].wrapping_add(1),
+            nullifier[1],
+            nullifier[2],
+            nullifier[3],
+        ];
         assert!(
             verify_spend_raw(&proof.proof_bytes, proof.anchor_felts, bad).is_err(),
             "tampered nullifier must fail verification"
@@ -307,12 +335,29 @@ mod tests {
     const CM_B: [u64; 4] = [50, 60, 70, 80];
     const UPPER_SIB: [u64; 4] = [9, 10, 11, 12];
 
-    fn siblings_leaf_a() -> [[u64; 4]; 20] { let mut s = [UPPER_SIB; 20]; s[0] = CM_B; s }
-    fn siblings_leaf_b() -> [[u64; 4]; 20] { let mut s = [UPPER_SIB; 20]; s[0] = CM_A; s }
-    fn is_right_leaf_b() -> [bool; 20] { let mut b = [false; 20]; b[0] = true; b }
+    fn siblings_leaf_a() -> [[u64; 4]; 20] {
+        let mut s = [UPPER_SIB; 20];
+        s[0] = CM_B;
+        s
+    }
+    fn siblings_leaf_b() -> [[u64; 4]; 20] {
+        let mut s = [UPPER_SIB; 20];
+        s[0] = CM_A;
+        s
+    }
+    fn is_right_leaf_b() -> [bool; 20] {
+        let mut b = [false; 20];
+        b[0] = true;
+        b
+    }
 
     fn make_single_input(nk: [u64; 4], cm: [u64; 4]) -> BatchSpendInput {
-        BatchSpendInput { nullifier_key: nk, note_commitment: cm, siblings: SIBLINGS, is_right: IS_RIGHT_ALL_LEFT }
+        BatchSpendInput {
+            nullifier_key: nk,
+            note_commitment: cm,
+            siblings: SIBLINGS,
+            is_right: IS_RIGHT_ALL_LEFT,
+        }
     }
 
     #[test]
@@ -345,7 +390,10 @@ mod tests {
         let (proof, nullifiers) =
             prove_spend_batch(&inputs).expect("batch prove must succeed for N=2");
         assert_eq!(nullifiers.len(), 2);
-        assert_ne!(nullifiers[0], nullifiers[1], "distinct nk/cm → distinct nullifiers");
+        assert_ne!(
+            nullifiers[0], nullifiers[1],
+            "distinct nk/cm → distinct nullifiers"
+        );
         verify_spend_batch(&proof).expect("batch verify must succeed for N=2");
     }
 
@@ -362,8 +410,9 @@ mod tests {
 
     #[test]
     fn batch_rejects_too_many_inputs() {
-        let inputs: Vec<BatchSpendInput> =
-            (0u64..11).map(|i| make_single_input([i; 4], [i + 1; 4])).collect();
+        let inputs: Vec<BatchSpendInput> = (0u64..11)
+            .map(|i| make_single_input([i; 4], [i + 1; 4]))
+            .collect();
         assert!(
             prove_spend_batch(&inputs).is_err(),
             "11 inputs must be rejected (max is 10)"

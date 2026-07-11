@@ -4,9 +4,9 @@ use winterfell::{
     matrix::ColMatrix,
     Air, AirContext, Assertion, AuxRandElements, BatchingMethod, CompositionPoly,
     CompositionPolyTrace, ConstraintCompositionCoefficients, DefaultConstraintCommitment,
-    DefaultConstraintEvaluator, DefaultTraceLde, EvaluationFrame, FieldExtension,
-    PartitionOptions, ProofOptions, Prover, StarkDomain, TraceInfo, TracePolyTable,
-    TraceTable, TransitionConstraintDegree,
+    DefaultConstraintEvaluator, DefaultTraceLde, EvaluationFrame, FieldExtension, PartitionOptions,
+    ProofOptions, Prover, StarkDomain, TraceInfo, TracePolyTable, TraceTable,
+    TransitionConstraintDegree,
 };
 
 use crate::hash::{eval_poseidon_round, get_round_constants};
@@ -59,7 +59,11 @@ impl Air for BatchedSpendCircuit {
     type BaseField = Felt;
     type PublicInputs = BatchedSpendPublicInputs;
 
-    fn new(trace_info: TraceInfo, pub_inputs: BatchedSpendPublicInputs, options: ProofOptions) -> Self {
+    fn new(
+        trace_info: TraceInfo,
+        pub_inputs: BatchedSpendPublicInputs,
+        options: ProofOptions,
+    ) -> Self {
         let mut degrees = Vec::with_capacity(24);
 
         // [0..8]   Poseidon round — degree 7, period 8
@@ -98,7 +102,10 @@ impl Air for BatchedSpendCircuit {
         // 8 assertion objects (4 nullifier cols + 4 anchor cols), each a sequence.
         // Periodic column layout: 12 existing (same as SpendCircuit) + 1 new (sel_not_block_end).
         let context = AirContext::new(trace_info, degrees, 8, options);
-        BatchedSpendCircuit { context, pub_inputs }
+        BatchedSpendCircuit {
+            context,
+            pub_inputs,
+        }
     }
 
     fn context(&self) -> &AirContext<Felt> {
@@ -118,12 +125,12 @@ impl Air for BatchedSpendCircuit {
         let current = frame.current();
         let next = frame.next();
 
-        let sel              = periodic_values[0];
-        let rc: [E; 8]       = core::array::from_fn(|k| periodic_values[1 + k]);
-        let sel_row0         = periodic_values[9];
-        let sel_row8         = periodic_values[10];
-        let sel_chain        = periodic_values[11];
-        let sel_not_blk_end  = periodic_values[12];
+        let sel = periodic_values[0];
+        let rc: [E; 8] = core::array::from_fn(|k| periodic_values[1 + k]);
+        let sel_row0 = periodic_values[9];
+        let sel_row8 = periodic_values[10];
+        let sel_chain = periodic_values[11];
+        let sel_not_blk_end = periodic_values[12];
 
         eval_poseidon_round(current, next, &rc, sel, result);
 
@@ -141,7 +148,7 @@ impl Air for BatchedSpendCircuit {
             result[16 + k] = sel_row8 * dl * dr;
         }
         for k in 0..4 {
-            let dl = next[k]     - current[k];
+            let dl = next[k] - current[k];
             let dr = next[4 + k] - current[k];
             result[20 + k] = sel_chain * dl * dr;
         }
@@ -175,8 +182,14 @@ impl Air for BatchedSpendCircuit {
         let mut columns = Vec::with_capacity(12);
 
         columns.push(vec![
-            Felt::ONE, Felt::ONE, Felt::ONE, Felt::ONE,
-            Felt::ONE, Felt::ONE, Felt::ONE, Felt::ZERO,
+            Felt::ONE,
+            Felt::ONE,
+            Felt::ONE,
+            Felt::ONE,
+            Felt::ONE,
+            Felt::ONE,
+            Felt::ONE,
+            Felt::ZERO,
         ]);
         for col in 0..8 {
             let mut v: Vec<Felt> = (0..7).map(|r| rc[r][col]).collect();
@@ -237,23 +250,27 @@ pub fn build_batched_trace(witnesses: &[SpendWitness], total_blocks: usize) -> T
                     witnesses[k].is_right,
                 )
             } else {
-                ([Felt::ZERO; 4], [Felt::ZERO; 4], [[Felt::ZERO; 4]; 20], [false; 20])
+                (
+                    [Felt::ZERO; 4],
+                    [Felt::ZERO; 4],
+                    [[Felt::ZERO; 4]; 20],
+                    [false; 20],
+                )
             }
         })
         .collect();
 
     let (nk0, cm0, _, _) = blocks[0];
     let init: [Felt; 12] = [
-        nk0[0], nk0[1], nk0[2], nk0[3],
-        cm0[0], cm0[1], cm0[2], cm0[3],
-        cm0[0], cm0[1], cm0[2], cm0[3],
+        nk0[0], nk0[1], nk0[2], nk0[3], cm0[0], cm0[1], cm0[2], cm0[3], cm0[0], cm0[1], cm0[2],
+        cm0[3],
     ];
 
     let mut trace = TraceTable::new(12, 256 * total_blocks);
     trace.fill(
         |state| state.copy_from_slice(&init),
         |step, state| {
-            let block      = step / 256;
+            let block = step / 256;
             let local_step = step % 256;
             let (_, cm, siblings, is_right) = &blocks[block];
 
@@ -270,7 +287,7 @@ pub fn build_batched_trace(witnesses: &[SpendWitness], total_blocks: usize) -> T
             }
 
             let hash_idx = local_step / 8;
-            let round    = local_step % 8;
+            let round = local_step % 8;
 
             if round < 7 {
                 crate::hash::poseidon_round(&mut state[..8], round);
@@ -307,15 +324,21 @@ pub struct BatchSpendProver {
 }
 
 impl BatchSpendProver {
-    pub fn new(
-        pub_inputs: BatchedSpendPublicInputs,
-    ) -> Self {
+    pub fn new(pub_inputs: BatchedSpendPublicInputs) -> Self {
         let options = ProofOptions::new(
-            32, 8, 0,
-            FieldExtension::Quadratic, 8, 31,
-            BatchingMethod::Linear, BatchingMethod::Linear,
+            32,
+            8,
+            0,
+            FieldExtension::Quadratic,
+            8,
+            31,
+            BatchingMethod::Linear,
+            BatchingMethod::Linear,
         );
-        BatchSpendProver { pub_inputs, options }
+        BatchSpendProver {
+            pub_inputs,
+            options,
+        }
     }
 }
 

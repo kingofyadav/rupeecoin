@@ -101,11 +101,18 @@ impl Drop for LoadedKeystore {
 // ── Crypto helpers ─────────────────────────────────────────────────────────────
 
 fn derive_key(password: &[u8], salt: &[u8]) -> Zeroizing<[u8; ARGON2_OUT_LEN]> {
-    let params =
-        Params::new(ARGON2_MEM_KIB, ARGON2_ITERS, ARGON2_LANES, Some(ARGON2_OUT_LEN)).unwrap();
+    let params = Params::new(
+        ARGON2_MEM_KIB,
+        ARGON2_ITERS,
+        ARGON2_LANES,
+        Some(ARGON2_OUT_LEN),
+    )
+    .unwrap();
     let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
     let mut key = Zeroizing::new([0u8; ARGON2_OUT_LEN]);
-    argon2.hash_password_into(password, salt, key.as_mut()).expect("argon2 params are valid");
+    argon2
+        .hash_password_into(password, salt, key.as_mut())
+        .expect("argon2 params are valid");
     key
 }
 
@@ -113,7 +120,10 @@ fn encrypt(plaintext: &[u8], key: &[u8; 32], nonce: &[u8; 24]) -> Vec<u8> {
     XChaCha20Poly1305::new(Key::from_slice(key))
         .encrypt(
             XNonce::from_slice(nonce),
-            chacha20poly1305::aead::Payload { msg: plaintext, aad: KEYSTORE_AD },
+            chacha20poly1305::aead::Payload {
+                msg: plaintext,
+                aad: KEYSTORE_AD,
+            },
         )
         .expect("encryption is infallible for valid params")
 }
@@ -122,7 +132,10 @@ fn decrypt(ct: &[u8], key: &[u8; 32], nonce: &[u8; 24]) -> Result<Vec<u8>, Keyst
     XChaCha20Poly1305::new(Key::from_slice(key))
         .decrypt(
             XNonce::from_slice(nonce),
-            chacha20poly1305::aead::Payload { msg: ct, aad: KEYSTORE_AD },
+            chacha20poly1305::aead::Payload {
+                msg: ct,
+                aad: KEYSTORE_AD,
+            },
         )
         .map_err(|_| KeystoreError::DecryptionFailed)
 }
@@ -257,7 +270,8 @@ pub fn load(path: &Path) -> Result<LoadedKeystore, KeystoreError> {
         }
         1 => Err(KeystoreError::InvalidKey(
             "keystore v1 stores private keys in plaintext and is no longer supported. \
-             Please run `rupeecoin-wallet generate` to create a v3 encrypted keystore.".into(),
+             Please run `rupeecoin-wallet generate` to create a v3 encrypted keystore."
+                .into(),
         )),
         v => Err(KeystoreError::InvalidKey(format!(
             "unsupported keystore version {v}; expected version 2 or 3. \

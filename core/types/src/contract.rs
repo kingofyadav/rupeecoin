@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 // 9-byte prefixes ensure no collision with the 8-byte LE u64 block height in regular coinbase_data.
 pub const CONTRACT_DEPLOY_PREFIX: &[u8] = b"CD\x01\x00\x00\x00\x00\x00\x00";
-pub const CONTRACT_CALL_PREFIX:   &[u8] = b"CC\x01\x00\x00\x00\x00\x00\x00";
+pub const CONTRACT_CALL_PREFIX: &[u8] = b"CC\x01\x00\x00\x00\x00\x00\x00";
 
 /// A contract deployment payload embedded in `Transaction::coinbase_data`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

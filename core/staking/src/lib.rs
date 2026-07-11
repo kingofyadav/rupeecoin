@@ -334,7 +334,8 @@ impl ValidatorRegistry {
     }
 
     pub fn total_active_stake(&self) -> u64 {
-        let total: u128 = self.active_set
+        let total: u128 = self
+            .active_set
             .iter()
             .filter_map(|a| self.validators.get(a))
             .map(|v| v.stake as u128)
@@ -362,7 +363,8 @@ impl ValidatorRegistry {
     /// Sum of effective weights (stake × contribution_multiplier) across the entire
     /// active set.  Used for proportional reward distribution.
     pub fn total_effective_weight(&self) -> u64 {
-        let total: u128 = self.active_set
+        let total: u128 = self
+            .active_set
             .iter()
             .filter_map(|a| self.validators.get(a))
             .map(|v| v.effective_weight() as u128)
@@ -374,7 +376,10 @@ impl ValidatorRegistry {
 
     /// Withdraw `amount` from a validator's claimable rewards.
     pub fn withdraw_rewards(&mut self, address: &Hash, amount: u64) -> Result<(), StakingError> {
-        let v = self.validators.get_mut(address).ok_or(StakingError::NotFound)?;
+        let v = self
+            .validators
+            .get_mut(address)
+            .ok_or(StakingError::NotFound)?;
         if v.claimable_rewards < amount {
             return Err(StakingError::InsufficientRewards {
                 available: v.claimable_rewards,
@@ -433,8 +438,7 @@ impl ValidatorRegistry {
                 if attested_this_epoch {
                     v.consecutive_missed_epochs = 0;
                 } else {
-                    v.consecutive_missed_epochs =
-                        v.consecutive_missed_epochs.saturating_add(1);
+                    v.consecutive_missed_epochs = v.consecutive_missed_epochs.saturating_add(1);
                 }
             }
         }

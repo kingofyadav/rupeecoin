@@ -97,7 +97,8 @@ impl FinalityTracker {
     /// prevent unbounded growth in long-running nodes.
     pub fn prune_old_checkpoints(&mut self) {
         let keep_from = self.last_finalized_epoch.saturating_sub(1);
-        self.justified_checkpoints.retain(|(epoch, _, _)| *epoch >= keep_from);
+        self.justified_checkpoints
+            .retain(|(epoch, _, _)| *epoch >= keep_from);
         self.justified.retain(|e| *e >= keep_from);
     }
 }

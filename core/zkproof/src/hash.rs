@@ -37,7 +37,10 @@ fn goldilocks_add(a: u64, b: u64) -> u64 {
 
 // Fermat's little theorem: a^(p-2) mod p.
 fn goldilocks_inv(a: u64) -> u64 {
-    debug_assert!(a != 0 && a < GOLDILOCKS_P, "goldilocks_inv: input must be in (0, P)");
+    debug_assert!(
+        a != 0 && a < GOLDILOCKS_P,
+        "goldilocks_inv: input must be in (0, P)"
+    );
     goldilocks_pow(a, GOLDILOCKS_P - 2)
 }
 
@@ -90,7 +93,11 @@ pub fn get_round_constants() -> &'static [[Felt; 8]; 7] {
                 let bytes = hash.as_bytes();
                 let raw = u64::from_le_bytes(bytes[..8].try_into().unwrap());
                 // Reduce into [0, P): one subtraction suffices since raw < 2^64 < 2P.
-                let val = if raw >= GOLDILOCKS_P { raw - GOLDILOCKS_P } else { raw };
+                let val = if raw >= GOLDILOCKS_P {
+                    raw - GOLDILOCKS_P
+                } else {
+                    raw
+                };
                 rc[r][c] = Felt::new(val);
             }
         }
@@ -150,7 +157,11 @@ fn bytes_to_felt4(b: &[u8; 32]) -> [Felt; 4] {
     core::array::from_fn(|i| {
         let v = u64::from_le_bytes(b[i * 8..(i + 1) * 8].try_into().unwrap());
         // Inputs must be in [0, P); reduce by one subtraction if needed.
-        Felt::new(if v >= GOLDILOCKS_P { v - GOLDILOCKS_P } else { v })
+        Felt::new(if v >= GOLDILOCKS_P {
+            v - GOLDILOCKS_P
+        } else {
+            v
+        })
     })
 }
 

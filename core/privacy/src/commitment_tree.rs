@@ -54,7 +54,10 @@ impl Serialize for CommitmentTree {
         struct Wire<'a> {
             leaves: &'a Vec<NoteCommitment>,
         }
-        Wire { leaves: &self.leaves }.serialize(s)
+        Wire {
+            leaves: &self.leaves,
+        }
+        .serialize(s)
     }
 }
 
@@ -151,15 +154,22 @@ impl CommitmentTree {
             let empty = empty_hashes()[level];
             let is_right = idx % 2 == 1;
             let sibling_idx = idx ^ 1;
-            let sibling =
-                if sibling_idx < layer.len() { layer[sibling_idx] } else { empty };
+            let sibling = if sibling_idx < layer.len() {
+                layer[sibling_idx]
+            } else {
+                empty
+            };
             path.push((sibling, is_right));
 
             let mut next = Vec::with_capacity((layer.len() + 1) / 2);
             let mut i = 0;
             while i < layer.len() {
                 let left = layer[i];
-                let right = if i + 1 < layer.len() { layer[i + 1] } else { empty };
+                let right = if i + 1 < layer.len() {
+                    layer[i + 1]
+                } else {
+                    empty
+                };
                 next.push(Hash::from_bytes(poseidon_compress_bytes(
                     left.as_bytes(),
                     right.as_bytes(),
@@ -232,9 +242,14 @@ mod tests {
             let mut i = 0;
             while i < layer.len() {
                 let left = layer[i];
-                let right = if i + 1 < layer.len() { layer[i + 1] } else { empty };
+                let right = if i + 1 < layer.len() {
+                    layer[i + 1]
+                } else {
+                    empty
+                };
                 next.push(Hash::from_bytes(poseidon_compress_bytes(
-                    left.as_bytes(), right.as_bytes(),
+                    left.as_bytes(),
+                    right.as_bytes(),
                 )));
                 i += 2;
             }
@@ -262,11 +277,7 @@ mod tests {
         let mut tree = CommitmentTree::new();
         for n in 1u8..=10 {
             tree.append(mk_leaf(n));
-            assert_eq!(
-                tree.root(),
-                root_scratch(&tree.leaves),
-                "mismatch at n={n}"
-            );
+            assert_eq!(tree.root(), root_scratch(&tree.leaves), "mismatch at n={n}");
         }
     }
 

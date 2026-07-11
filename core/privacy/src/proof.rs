@@ -176,7 +176,10 @@ pub enum SpendEvidence {
     ///
     /// Deprecated: new transactions must use `Stark` or `BatchedStark`.
     /// Retained for deserialization of historical data only.
-    #[deprecated(since = "0.5.0", note = "use Stark or BatchedStark; Blake3Path reveals note commitment")]
+    #[deprecated(
+        since = "0.5.0",
+        note = "use Stark or BatchedStark; Blake3Path reveals note commitment"
+    )]
     Blake3Path(SpendProof),
     /// Phase 5B zk-STARK spend proof — hides note commitment entirely.
     Stark(StarkSpendProof),

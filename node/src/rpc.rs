@@ -281,8 +281,7 @@ async fn submit_privacy_tx(
         if batched_count != batch_proof.num_spends as usize {
             return Err(RpcError(format!(
                 "batch STARK proof covers {} inputs but tx has {} BatchedStark inputs",
-                batch_proof.num_spends,
-                batched_count
+                batch_proof.num_spends, batched_count
             )));
         }
 
@@ -424,13 +423,14 @@ async fn get_nonce(
     State(state): State<Arc<RpcState>>,
     Query(params): Query<NonceParams>,
 ) -> Result<impl IntoResponse, RpcError> {
-    let addr_bytes = if params.addr.len() == 40 && params.addr.chars().all(|c| c.is_ascii_hexdigit()) {
-        hex::decode(&params.addr).map_err(|e| RpcError(format!("hex decode: {e}")))?
-    } else {
-        let addr = rupeecoin_crypto::decode_address(&params.addr)
-            .map_err(|e| RpcError(format!("invalid address: {e}")))?;
-        addr.0.to_vec()
-    };
+    let addr_bytes =
+        if params.addr.len() == 40 && params.addr.chars().all(|c| c.is_ascii_hexdigit()) {
+            hex::decode(&params.addr).map_err(|e| RpcError(format!("hex decode: {e}")))?
+        } else {
+            let addr = rupeecoin_crypto::decode_address(&params.addr)
+                .map_err(|e| RpcError(format!("invalid address: {e}")))?;
+            addr.0.to_vec()
+        };
     let addr_hex = hex::encode(&addr_bytes);
     let nonce = state
         .chain_snapshot
@@ -470,8 +470,8 @@ async fn get_utxos(
 ) -> Result<impl IntoResponse, RpcError> {
     // Accept both hex (40 chars) and Base58Check.
     let addr = if params.addr.len() == 40 && params.addr.chars().all(|c| c.is_ascii_hexdigit()) {
-        let bytes = hex::decode(&params.addr)
-            .map_err(|_| RpcError("invalid hex address".into()))?;
+        let bytes =
+            hex::decode(&params.addr).map_err(|_| RpcError("invalid hex address".into()))?;
         let mut arr = [0u8; 20];
         arr.copy_from_slice(&bytes);
         Address(arr)
@@ -493,7 +493,7 @@ async fn get_utxos(
             amount_micro: out.amount,
             amount_rpc: out.amount as f64 / 100_000_000.0,
             amount_rpc_whole: out.amount / 100_000_000,
-            amount_rpc_frac:  out.amount % 100_000_000,
+            amount_rpc_frac: out.amount % 100_000_000,
         })
         .collect();
 

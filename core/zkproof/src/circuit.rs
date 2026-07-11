@@ -83,7 +83,10 @@ impl Air for SpendCircuit {
         }
 
         let context = AirContext::new(trace_info, degrees, 8, options);
-        SpendCircuit { context, pub_inputs }
+        SpendCircuit {
+            context,
+            pub_inputs,
+        }
     }
 
     fn context(&self) -> &AirContext<Felt> {
@@ -128,7 +131,7 @@ impl Air for SpendCircuit {
         // Product: sel_row8 * (cm_carry - left) * (cm_carry - right) = 0.
         // This is zero when cm_carry matches either input position.
         for k in 0..4 {
-            let diff_left  = current[8 + k] - current[k];
+            let diff_left = current[8 + k] - current[k];
             let diff_right = current[8 + k] - current[4 + k];
             result[16 + k] = sel_row8 * diff_left * diff_right;
         }
@@ -138,7 +141,7 @@ impl Air for SpendCircuit {
         // next hash input row.
         // Product: sel_chain * (next[k] - current[k]) * (next[4+k] - current[k]) = 0.
         for k in 0..4 {
-            let diff_left  = next[k]     - current[k];
+            let diff_left = next[k] - current[k];
             let diff_right = next[4 + k] - current[k];
             result[20 + k] = sel_chain * diff_left * diff_right;
         }
@@ -163,8 +166,14 @@ impl Air for SpendCircuit {
 
         // sel_poseidon: period 8
         columns.push(vec![
-            Felt::ONE, Felt::ONE, Felt::ONE, Felt::ONE,
-            Felt::ONE, Felt::ONE, Felt::ONE, Felt::ZERO,
+            Felt::ONE,
+            Felt::ONE,
+            Felt::ONE,
+            Felt::ONE,
+            Felt::ONE,
+            Felt::ONE,
+            Felt::ONE,
+            Felt::ZERO,
         ]);
 
         // Round constants: 8 columns, period 8

@@ -26,10 +26,7 @@ pub fn apply_inactivity_leak(registry: &mut ValidatorRegistry, current_epoch: u6
             continue;
         }
         let _excess_epochs = missed - INACTIVITY_THRESHOLD_EPOCHS;
-        let stake = registry
-            .get(&addr)
-            .map(|v| v.stake)
-            .unwrap_or(0);
+        let stake = registry.get(&addr).map(|v| v.stake).unwrap_or(0);
         if stake == 0 {
             continue;
         }

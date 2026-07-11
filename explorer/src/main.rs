@@ -6,8 +6,8 @@
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
 use axum::{
     extract::{Path, Query, State},
@@ -204,7 +204,9 @@ async fn serve_spa() -> Response {
 async fn api_height(State(s): State<Arc<ExplorerState>>) -> Response {
     refresh_if_needed(&s).await;
     match s.store.get_tip() {
-        Ok(Some((hash, height))) => Json(json!({ "height": height, "hash": h(&hash) })).into_response(),
+        Ok(Some((hash, height))) => {
+            Json(json!({ "height": height, "hash": h(&hash) })).into_response()
+        }
         Ok(None) => Json(json!({ "height": 0, "hash": null })).into_response(),
         Err(e) => internal(e.to_string()),
     }
@@ -372,8 +374,7 @@ async fn api_search(
         let hash = Hash::from_bytes(bytes);
 
         if let Ok(Some(block)) = s.store.get_block_by_hash(&hash) {
-            return Json(json!({ "type": "block", "data": block_summary(&block) }))
-                .into_response();
+            return Json(json!({ "type": "block", "data": block_summary(&block) })).into_response();
         }
 
         let index = s.tx_index.read().await;
@@ -468,10 +469,18 @@ async fn main() {
     let args = Args::parse();
 
     let store = if let Some(ref sec) = args.secondary_path {
-        tracing::info!("opening chain store (secondary) at {} secondary={}", args.data_dir.display(), sec.display());
-        ChainStore::open_secondary(&args.data_dir, sec).expect("failed to open data dir as secondary")
+        tracing::info!(
+            "opening chain store (secondary) at {} secondary={}",
+            args.data_dir.display(),
+            sec.display()
+        );
+        ChainStore::open_secondary(&args.data_dir, sec)
+            .expect("failed to open data dir as secondary")
     } else {
-        tracing::info!("opening chain store (read-only) at {}", args.data_dir.display());
+        tracing::info!(
+            "opening chain store (read-only) at {}",
+            args.data_dir.display()
+        );
         ChainStore::open_read_only(&args.data_dir).expect("failed to open data dir")
     };
 

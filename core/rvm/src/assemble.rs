@@ -70,7 +70,9 @@ impl Assembler {
     pub fn build(&self) -> Result<Vec<u8>, String> {
         let mut code = self.code.clone();
         for (offset, label) in &self.patches {
-            let addr = *self.labels.get(label.as_str())
+            let addr = *self
+                .labels
+                .get(label.as_str())
                 .ok_or_else(|| format!("undefined label: {label}"))?;
             code[*offset..*offset + 8].copy_from_slice(&addr.to_be_bytes());
         }
