@@ -59,7 +59,7 @@ impl PyWallet {
 
     /// Return the 32-byte master seed.  Store securely.
     fn master_seed<'py>(&self, py: Python<'py>) -> Bound<'py, pyo3::types::PyBytes> {
-        pyo3::types::PyBytes::new_bound(py, self.inner.master_seed())
+        pyo3::types::PyBytes::new(py, self.inner.master_seed())
     }
 
     fn __repr__(&self) -> String {
@@ -99,7 +99,7 @@ impl PyRpcClient {
     /// Return a dict with the full node status snapshot.
     fn status<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
         let s: NodeStatus = self.inner.status().map_err(to_py_err)?;
-        let d = PyDict::new_bound(py);
+        let d = PyDict::new(py);
         d.set_item("height",                s.height)?;
         d.set_item("slot",                  s.slot)?;
         d.set_item("epoch",                 s.epoch)?;
@@ -123,7 +123,7 @@ impl PyRpcClient {
         entries
             .into_iter()
             .map(|u| {
-                let d = PyDict::new_bound(py);
+                let d = PyDict::new(py);
                 d.set_item("txid",         &u.txid)?;
                 d.set_item("vout",         u.vout)?;
                 d.set_item("amount_micro", u.amount_micro)?;
@@ -298,7 +298,7 @@ fn encode_addr(raw: &[u8]) -> PyResult<String> {
 #[pyfunction]
 fn decode_addr<'py>(py: Python<'py>, addr: &str) -> PyResult<Bound<'py, pyo3::types::PyBytes>> {
     let bytes = parse_addr_to_bytes(addr).map_err(to_py_err)?;
-    Ok(pyo3::types::PyBytes::new_bound(py, &bytes))
+    Ok(pyo3::types::PyBytes::new(py, &bytes))
 }
 
 // ── internal helpers ──────────────────────────────────────────────────────────

@@ -86,10 +86,15 @@ impl Mempool {
     }
 
     /// Pull up to `limit` transactions for block assembly, highest-fee first.
-    pub fn drain_for_block(&mut self, limit: usize) -> Vec<Transaction> {
+    ///
+    /// Transactions paying less than `min_fee` (the next block's base fee) are
+    /// skipped and left in the pool: including them would produce a block the
+    /// chain rejects under the base-fee floor.
+    pub fn drain_for_block(&mut self, limit: usize, min_fee: u64) -> Vec<Transaction> {
         let mut by_fee: Vec<(Hash, u64)> = self
             .txs
             .iter()
+            .filter(|(_, (_, fee))| *fee >= min_fee)
             .map(|(id, (_, fee))| (*id, *fee))
             .collect();
         by_fee.sort_unstable_by(|a, b| b.1.cmp(&a.1)); // descending fee
@@ -137,7 +142,16 @@ mod tests {
     #[test]
     fn drain_for_block_is_empty_when_pool_empty() {
         let mut pool = Mempool::new(100);
-        assert!(pool.drain_for_block(10).is_empty());
+        assert!(pool.drain_for_block(10, 0).is_empty());
+    }
+
+    #[test]
+    fn drain_for_block_skips_below_min_fee() {
+        let (mut pool, _) = pool_with_fees(vec![10, 500, 50, 1_000]);
+        // Only the two txs paying ≥ 100 should be drained; the rest stay.
+        let drained = pool.drain_for_block(10, 100);
+        assert_eq!(drained.len(), 2);
+        assert_eq!(pool.len(), 2);
     }
 
     #[test]
@@ -186,7 +200,7 @@ mod tests {
         fn drain_returns_highest_fee_first(fees in proptest::collection::vec(0u64..1_000_000, 1..20)) {
             let (mut pool, _) = pool_with_fees(fees);
             let limit = pool.len();
-            let drained = pool.drain_for_block(limit);
+            let drained = pool.drain_for_block(limit, 0);
             // Check that the pool is empty after full drain.
             prop_assert!(pool.is_empty(), "pool should be empty after full drain");
             // Count must match.
@@ -201,7 +215,7 @@ mod tests {
         ) {
             let (mut pool, _) = pool_with_fees(fees.clone());
             let n = fees.len();
-            let drained = pool.drain_for_block(limit);
+            let drained = pool.drain_for_block(limit, 0);
             prop_assert_eq!(drained.len(), limit.min(n));
             prop_assert_eq!(pool.len(), n - limit.min(n));
         }

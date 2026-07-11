@@ -123,14 +123,20 @@ pub struct FeeRouteSplit {
     pub pmfp_contribution: u64,
 }
 
-/// Split `gas_used * base_fee` between burn and PMFP.
+/// Split the block's actually-collected transaction fees between burn and PMFP.
 ///
-/// PMFP (minority share, 30%) is computed first so rounding dust stays in the
+/// `total_fees` is the real value removed from circulation by the block's
+/// transfers (Σ inputs − Σ outputs). Applying the block already burns the whole
+/// amount from the UTXO set, so `burned` is informational and `pmfp_contribution`
+/// (30 %) is the portion re-credited to the PMFP accumulator. Routing measured
+/// fees — rather than a `gas_used × base_fee` estimate — keeps supply conserved:
+/// PMFP can never receive value that was not genuinely collected.
+///
+/// PMFP (minority share, 30 %) is computed first so rounding dust stays in the
 /// burn amount rather than being silently added to the PMFP pool.
-pub fn route_fees(gas_used: u64, base_fee: u64) -> FeeRouteSplit {
-    let total = gas_used.saturating_mul(base_fee);
-    let pmfp_contribution = total * FEE_PMFP_PERCENT / 100;
-    let burned = total.saturating_sub(pmfp_contribution);
+pub fn route_fees(total_fees: u64) -> FeeRouteSplit {
+    let pmfp_contribution = ((total_fees as u128) * FEE_PMFP_PERCENT as u128 / 100) as u64;
+    let burned = total_fees.saturating_sub(pmfp_contribution);
     FeeRouteSplit {
         burned,
         pmfp_contribution,
